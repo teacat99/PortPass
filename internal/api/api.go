@@ -19,6 +19,33 @@ import (
 	"github.com/teacat99/PortPass/internal/store"
 )
 
+// ensurePortPolicy enforces the non-admin user port policy: the requested
+// (port, protocol) must match a PresetPort with UserAllowed=true, and the
+// requested duration must fit within the preset's MaxDurationSec (0 means
+// inherit the global cap only). Admins bypass this check.
+// Returns (matchedPreset, nil) on success; the caller is expected to abort
+// with the returned error code when non-nil.
+func (s *Server) ensurePortPolicy(c *gin.Context, port int, proto string, durationSec int) (*model.PresetPort, bool) {
+	_, _, role := auth.Principal(c)
+	if role == model.RoleAdmin {
+		return nil, true
+	}
+	preset, err := s.store.FindPresetForUser(port, proto)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return nil, false
+	}
+	if preset == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "port not allowed for non-admin user"})
+		return nil, false
+	}
+	if preset.MaxDurationSec > 0 && durationSec > preset.MaxDurationSec {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("duration exceeds allowed for this port (max %ds)", preset.MaxDurationSec)})
+		return nil, false
+	}
+	return preset, true
+}
+
 // Server wires the HTTP router with its dependencies. Constructing Server
 // from main keeps the API package free of global state and simplifies tests.
 type Server struct {
@@ -55,6 +82,12 @@ func (s *Server) Router(engine *gin.Engine) {
 	g.GET("/health", s.handleHealth)
 	g.GET("/client-ip", s.handleClientIP)
 
+	// Identity & self-service.
+	g.GET("/auth/me", s.handleMe)
+	g.POST("/auth/password", s.handleChangeOwnPassword)
+
+	// Rules are visible to every authenticated user; per-role scoping is
+	// applied inside the handler (admin sees all, user sees own).
 	g.GET("/rules", s.handleListRules)
 	g.POST("/rules", s.handleCreateRule)
 	g.GET("/rules/:id", s.handleGetRule)
@@ -64,9 +97,19 @@ func (s *Server) Router(engine *gin.Engine) {
 
 	g.GET("/history", s.handleHistory)
 
+	// Preset list is readable by every user (non-admin sees only the
+	// user-allowed subset). Mutations are admin-only.
 	g.GET("/preset-ports", s.handleListPresets)
 	g.POST("/preset-ports", s.handleUpsertPreset)
 	g.DELETE("/preset-ports/:id", s.handleDeletePreset)
+
+	// User management endpoints (admin-only is enforced inside the
+	// handler via ensureAdmin so the auth layer can keep a single gate).
+	g.GET("/users", s.handleListUsers)
+	g.POST("/users", s.handleCreateUser)
+	g.PUT("/users/:id", s.handleUpdateUser)
+	g.POST("/users/:id/password", s.handleResetUserPassword)
+	g.DELETE("/users/:id", s.handleDeleteUser)
 
 	g.GET("/settings", s.handleGetSettings)
 	g.PUT("/settings", s.handlePutSettings)
@@ -136,7 +179,19 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 		return
 	}
 
-	existing, err := s.store.ListActiveByIP(clientIP)
+	uid, username, _ := auth.Principal(c)
+
+	// Port policy: non-admin users must hit a user-allowed preset and
+	// respect its MaxDurationSec. Admins skip this entirely.
+	durationForPolicy := req.DurationSec
+	if durationForPolicy == 0 {
+		durationForPolicy = int(time.Until(expireAt).Seconds())
+	}
+	if _, ok := s.ensurePortPolicy(c, req.Port, proto, durationForPolicy); !ok {
+		return
+	}
+
+	existing, err := s.store.ListActiveByUserIP(uid, clientIP)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -147,13 +202,14 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 	}
 
 	rule := &model.Rule{
+		UserID:    uid,
 		SourceIP:  source,
 		Port:      req.Port,
 		Protocol:  proto,
 		Note:      req.Note,
 		Status:    model.StatusPending,
 		ExpireAt:  expireAt,
-		CreatedBy: "local",
+		CreatedBy: username,
 		CreatedIP: clientIP,
 		CreatedAt: time.Now(),
 	}
@@ -166,7 +222,7 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 		return
 	}
 	_ = s.store.WriteAudit(&model.AuditLog{
-		Action: "create", RuleID: rule.ID, Actor: rule.CreatedBy, ActorIP: clientIP,
+		Action: "create", RuleID: rule.ID, Actor: username, ActorIP: clientIP,
 		Detail: fmt.Sprintf("%s %d/%s until %s", source, req.Port, proto, expireAt.Format(time.RFC3339)),
 	})
 	c.JSON(http.StatusOK, rule)
@@ -180,12 +236,43 @@ func (s *Server) handleListRules(c *gin.Context) {
 	if q := c.Query("status"); q != "" {
 		filter.Statuses = strings.Split(q, ",")
 	}
+	s.applyRoleScope(c, &filter)
 	rules, total, err := s.store.ListAllRules(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"rules": rules, "total": total})
+}
+
+// applyRoleScope narrows the filter to the caller's user id when the
+// caller is not an admin. Admins may optionally pass ?user_id= to drill
+// into a specific user; a zero or absent value returns everything.
+func (s *Server) applyRoleScope(c *gin.Context, filter *store.RuleFilter) {
+	uid, _, role := auth.Principal(c)
+	if role == model.RoleAdmin {
+		if q := c.Query("user_id"); q != "" {
+			if n := parseIntDefault(q, 0); n > 0 {
+				filter.UserID = uint(n)
+			}
+		}
+		return
+	}
+	filter.UserID = uid
+}
+
+// ensureRuleVisible makes sure the current principal may read/mutate the
+// target rule. Admins see all; users only their own.
+func (s *Server) ensureRuleVisible(c *gin.Context, r *model.Rule) bool {
+	uid, _, role := auth.Principal(c)
+	if role == model.RoleAdmin {
+		return true
+	}
+	if r.UserID != uid {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleGetRule(c *gin.Context) {
@@ -203,6 +290,9 @@ func (s *Server) handleGetRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	if !s.ensureRuleVisible(c, r) {
+		return
+	}
 	c.JSON(http.StatusOK, r)
 }
 
@@ -215,6 +305,9 @@ func (s *Server) handleTerminateRule(c *gin.Context) {
 	r, err := s.store.GetRule(id)
 	if err != nil || r == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if !s.ensureRuleVisible(c, r) {
 		return
 	}
 	if err := s.lifecycle.Revoke(r); err != nil {
@@ -247,6 +340,9 @@ func (s *Server) handleExtendRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	if !s.ensureRuleVisible(c, r) {
+		return
+	}
 	if r.Status != model.StatusActive && r.Status != model.StatusPending {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "rule is not active"})
 		return
@@ -255,6 +351,11 @@ func (s *Server) handleExtendRule(c *gin.Context) {
 	maxExpire := time.Now().Add(time.Duration(s.cfg.MaxDurationHours) * time.Hour)
 	if newExpire.After(maxExpire) {
 		newExpire = maxExpire
+	}
+	// Port policy: extending must still fit the preset cap for regular users.
+	remaining := int(time.Until(newExpire).Seconds())
+	if _, ok := s.ensurePortPolicy(c, r.Port, r.Protocol, remaining); !ok {
+		return
 	}
 	if err := s.lifecycle.Extend(r, newExpire); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -278,6 +379,9 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	if !s.ensureRuleVisible(c, src) {
+		return
+	}
 	clientIP := s.clientIP(c)
 	if !s.limiter.Allow(clientIP) {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
@@ -291,9 +395,14 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 	if expireAt.After(max) {
 		expireAt = max
 	}
+	uid, username, _ := auth.Principal(c)
+	durationForPolicy := int(time.Until(expireAt).Seconds())
+	if _, ok := s.ensurePortPolicy(c, src.Port, src.Protocol, durationForPolicy); !ok {
+		return
+	}
 	dup := &model.Rule{
-		SourceIP: src.SourceIP, Port: src.Port, Protocol: src.Protocol, Note: src.Note,
-		Status: model.StatusPending, ExpireAt: expireAt, CreatedBy: "local",
+		UserID: uid, SourceIP: src.SourceIP, Port: src.Port, Protocol: src.Protocol, Note: src.Note,
+		Status: model.StatusPending, ExpireAt: expireAt, CreatedBy: username,
 		CreatedIP: clientIP, CreatedAt: time.Now(),
 	}
 	if err := s.store.CreateRule(dup); err != nil {
@@ -305,7 +414,7 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 		return
 	}
 	_ = s.store.WriteAudit(&model.AuditLog{
-		Action: "duplicate", RuleID: dup.ID, ActorIP: clientIP,
+		Action: "duplicate", RuleID: dup.ID, Actor: username, ActorIP: clientIP,
 		Detail: fmt.Sprintf("from rule %d", src.ID),
 	})
 	c.JSON(http.StatusOK, dup)
@@ -332,6 +441,7 @@ func (s *Server) handleHistory(c *gin.Context) {
 			filter.To = t
 		}
 	}
+	s.applyRoleScope(c, &filter)
 	rules, total, err := s.store.ListAllRules(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -341,7 +451,16 @@ func (s *Server) handleHistory(c *gin.Context) {
 }
 
 func (s *Server) handleListPresets(c *gin.Context) {
-	ps, err := s.store.ListPresetPorts()
+	_, _, role := auth.Principal(c)
+	var (
+		ps  []model.PresetPort
+		err error
+	)
+	if role == model.RoleAdmin {
+		ps, err = s.store.ListPresetPorts()
+	} else {
+		ps, err = s.store.ListUserAllowedPresets()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -350,6 +469,9 @@ func (s *Server) handleListPresets(c *gin.Context) {
 }
 
 func (s *Server) handleUpsertPreset(c *gin.Context) {
+	if !s.ensureAdmin(c) {
+		return
+	}
 	var p model.PresetPort
 	if err := c.ShouldBindJSON(&p); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -363,6 +485,10 @@ func (s *Server) handleUpsertPreset(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if p.MaxDurationSec < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "max_duration_sec must be >= 0"})
+		return
+	}
 	if err := s.store.UpsertPresetPort(&p); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -371,6 +497,9 @@ func (s *Server) handleUpsertPreset(c *gin.Context) {
 }
 
 func (s *Server) handleDeletePreset(c *gin.Context) {
+	if !s.ensureAdmin(c) {
+		return
+	}
 	id, err := parseID(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -401,6 +530,9 @@ func (s *Server) handleGetSettings(c *gin.Context) {
 }
 
 func (s *Server) handlePutSettings(c *gin.Context) {
+	if !s.ensureAdmin(c) {
+		return
+	}
 	var kv map[string]string
 	if err := c.ShouldBindJSON(&kv); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

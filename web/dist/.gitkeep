@@ -1,2 +1,0 @@
-# 占位文件：前端构建 (`npm run build`) 会用实际产物覆盖此目录。
-# 保留 .gitkeep 是为了让 //go:embed all:dist 在未构建前端时也能编译通过。

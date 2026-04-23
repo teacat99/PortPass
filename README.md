@@ -10,11 +10,14 @@
 
 ```bash
 curl -LO https://raw.githubusercontent.com/teacat99/PortPass/main/docker-compose.yaml
-# 编辑 docker-compose.yaml，至少修改 PORTPASS_ADMIN_PASSWORD
+# 可选：在 docker-compose.yaml 里设置 PORTPASS_ADMIN_PASSWORD=<种子密码>
+# 若未设置，首次启动会自动创建默认管理员：admin / passwd（请登录后立即修改）
 docker compose up -d
 ```
 
-访问 `http://<server>:8080`，使用配置的密码登录。
+访问 `http://<server>:8080`，使用默认的 `admin / passwd`（或你设置的种子密码）登录。
+
+> ⚠️ **首次登录即改密**：默认 `admin / passwd` 仅用于引导，登录后请在右上角的"修改密码"菜单里立刻更换，后续可在 **用户管理** 页面创建更多管理员/普通用户。
 
 ### 单命令 Docker
 
@@ -25,6 +28,7 @@ docker run -d \
   --network host \
   --cap-add NET_ADMIN \
   -v $PWD/data:/data \
+  # 可选：设置种子密码；省略则首次启动回落到 admin/passwd
   -e PORTPASS_ADMIN_PASSWORD="change-me" \
   ghcr.io/teacat99/portpass:latest
 ```
@@ -60,8 +64,10 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 - ✅ **多防火墙驱动**：iptables / nftables / ufw / firewalld，IPv4+IPv6
 - ✅ **PWA**：可安装到手机桌面，Workbox 离线缓存
 - ✅ **多鉴权模式**：密码 + JWT / IP 白名单 / 无鉴权（内网）
-- ✅ **审计日志**：所有规则变更可追溯
-- ✅ **中英双语 + 移动端自适应**
+- ✅ **多用户体系**：管理员（可多位）+ 普通用户；管理员在 UI 管理账号，密码落库 bcrypt
+- ✅ **端口策略**：管理员决定普通用户可开放的预设端口与单条最大时长
+- ✅ **审计日志**：所有规则变更可追溯（记录 `user_id` + `created_by`）
+- ✅ **中英双语 + 移动端自适应**（表格 ↔ 卡片，表单堆叠，44px 触控区）
 
 ## 环境变量
 
@@ -69,7 +75,8 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 | --- | --- | --- |
 | `PORTPASS_LISTEN` | `:8080` | HTTP 监听地址 |
 | `PORTPASS_AUTH_MODE` | `password` | `password` / `ipwhitelist` / `none` |
-| `PORTPASS_ADMIN_PASSWORD` | —— | `AUTH_MODE=password` 时必填 |
+| `PORTPASS_ADMIN_USERNAME` | `admin` | 种子管理员的用户名（仅首次启动生效） |
+| `PORTPASS_ADMIN_PASSWORD` | `passwd` | 种子管理员的密码；首次启动未设置时落到 `passwd` 并打印告警，后续在 UI 管理 |
 | `PORTPASS_ADMIN_IP_WHITELIST` | —— | 逗号分隔的 CIDR 列表，`ipwhitelist` 模式下必填 |
 | `PORTPASS_TRUSTED_PROXIES` | —— | 反代 CIDR；配置后才解析 `X-Forwarded-For` |
 | `PORTPASS_FIREWALL_DRIVER` | `iptables` | `iptables` / `nftables` / `ufw` / `firewalld` / `mock` |
@@ -79,6 +86,31 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 | `PORTPASS_HISTORY_RETENTION_DAYS` | `30` | 审计日志保留天数 |
 | `PORTPASS_MAX_RULES_PER_IP` | `20` | 同一创建者并发规则上限 |
 | `PORTPASS_RATELIMIT_PER_MINUTE` | `10` | 每 IP 每分钟创建速率 |
+
+## 多用户与端口策略
+
+PortPass 把账号体系全部落库（bcrypt hash），鉴权模式只是决定"用哪条身份访问 API"：
+
+| 鉴权模式 | 身份来源 | 谁能管理账号 |
+| --- | --- | --- |
+| `password` | 登录表单校验 DB 中的用户 | 任一管理员 |
+| `ipwhitelist` | 命中白名单即以**内置系统管理员**身份登入 | 同上（可在 UI 继续建/改账号） |
+| `none` | 无鉴权，全部请求视为系统管理员 | 同上（仅建议内网使用） |
+
+**管理员规则**：
+
+1. 首次启动若未设置 `PORTPASS_ADMIN_PASSWORD`，自动创建 `admin / passwd`，日志打印告警，请立即修改。
+2. 支持**多位管理员**并行存在，任一管理员可在 `/users` 页面创建/重置/禁用账号。
+3. 管理员**不能删除或降级/禁用自身**（API 返回 `400 cannot modify ... on self`）。
+4. 系统**始终保留至少一位活跃管理员**，删除 / 降级 / 禁用"最后一位 admin"的请求被拒绝。
+5. 删除用户时，该用户名下所有活跃规则会被一并撤销（防火墙条目同步清理）。
+
+**端口策略**（管理员 → 普通用户）：
+
+- 在 **设置 → 预设端口** 里为每条预设勾选 `user_allowed` 和 `max_duration_sec`。
+- 普通用户只能看到并选择被标记 `user_allowed=true` 的预设。
+- 普通用户创建/续期规则时，`duration_sec` 若超过预设的 `max_duration_sec`，返回 `400 duration exceeds allowed ...`。
+- 管理员不受端口策略限制，且可在 UI 按用户过滤规则列表（`GET /api/rules?user_id=<id>`）。
 
 ## 防火墙驱动选择
 
@@ -140,6 +172,7 @@ go test ./...
 3. 生产环境优先使用 `ipwhitelist` 模式（天然免于密码爆破）
 4. 定期检查 `审计日志`，关注异常创建者 IP
 5. `PORTPASS_MAX_DURATION_HOURS` 建议≤24，避免"临时"变"永久"
+6. **首次登录即改掉默认密码**：默认种子 `admin / passwd` 日志会打印红色告警，上线前务必在 UI 里改掉；如需多人管理请创建独立的管理员账号，保留至少一位作为最后防线
 
 ## 基准测试
 

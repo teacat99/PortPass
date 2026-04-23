@@ -7,6 +7,7 @@ export default {
     home: 'Home',
     rules: 'Rules',
     history: 'History',
+    users: 'Users',
     settings: 'Settings'
   },
   action: {
@@ -23,7 +24,37 @@ export default {
     refresh: 'Refresh',
     login: 'Login',
     logout: 'Logout',
-    search: 'Search'
+    search: 'Search',
+    change_password: 'Change password',
+    reset_password: 'Reset password',
+    enable: 'Enable',
+    disable: 'Disable',
+    new_user: 'New user'
+  },
+  password: {
+    old: 'Current password',
+    new: 'New password',
+    confirm: 'Confirm new password',
+    too_short: 'Password must be at least 6 characters',
+    mismatch: 'Passwords do not match',
+    changed: 'Password updated'
+  },
+  users: {
+    title: 'User management',
+    username: 'Username',
+    role: 'Role',
+    disabled: 'Disabled',
+    enabled: 'Enabled',
+    createdAt: 'Created at',
+    actions: 'Actions',
+    deleteConfirm: 'Delete this user? Their active rules will be terminated immediately.',
+    roleAdmin: 'Admin',
+    roleUser: 'User',
+    newUser: 'New user',
+    editUser: 'Edit user',
+    resetPwd: 'Reset password',
+    selfCannotModify: 'You cannot change your own role or disabled flag',
+    lastAdminWarn: 'At least one active admin must remain'
   },
   home: {
     clientIP: 'Current client IP',
@@ -76,12 +107,18 @@ export default {
     firewallDriver: 'Firewall driver',
     maxDuration: 'Max duration (hours)',
     historyRetention: 'History retention (days)',
-    trustedProxies: 'Trusted proxy CIDR list'
+    trustedProxies: 'Trusted proxy CIDR list',
+    userAllowed: 'Available to users',
+    userAllowedHelp: 'When enabled, non-admin users may open this port',
+    maxDurationSec: 'Max duration per rule for users (sec)',
+    maxDurationSecHelp: '0 disables the per-port cap (still bounded by the global max duration)'
   },
   login: {
     title: 'Sign in to PortPass',
-    password: 'Admin password',
-    passwordPlaceholder: 'Enter password to continue',
+    username: 'Username',
+    usernamePlaceholder: 'Default first-boot username is admin',
+    password: 'Password',
+    passwordPlaceholder: 'First-boot default is passwd - please change it',
     failed: 'Login failed'
   },
   status: {
@@ -109,6 +146,9 @@ export default {
     ruleDuplicated: 'Rule duplicated',
     presetSaved: 'Preset saved',
     presetDeleted: 'Preset deleted',
+    userCreated: 'User created',
+    userUpdated: 'User updated',
+    userDeleted: 'User deleted',
     loadFailed: 'Load failed',
     invalidInput: 'Invalid input'
   }

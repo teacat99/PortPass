@@ -41,6 +41,14 @@ func main() {
 	if err := s.SeedPresetPorts(); err != nil {
 		log.Fatalf("seed presets: %v", err)
 	}
+	adminID, err := s.SeedAdminIfEmpty(cfg.AdminUsername, cfg.AdminPassword)
+	if err != nil {
+		log.Fatalf("seed admin: %v", err)
+	}
+	adminUsername := cfg.AdminUsername
+	if adminUsername == "" {
+		adminUsername = store.DefaultAdminUsername
+	}
 
 	drv, err := firewall.NewDriver(cfg.FirewallDriver)
 	if err != nil {
@@ -62,7 +70,8 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	authn := auth.New(cfg)
+	authn := auth.New(cfg, s)
+	authn.SetSystemAdmin(adminID, adminUsername)
 	server := api.New(cfg, s, lm, authn)
 	server.Router(r)
 

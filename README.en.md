@@ -10,11 +10,14 @@ English | [中文](./README.md)
 
 ```bash
 curl -LO https://raw.githubusercontent.com/teacat99/PortPass/main/docker-compose.yaml
-# Edit docker-compose.yaml; at minimum change PORTPASS_ADMIN_PASSWORD
+# Optional: set PORTPASS_ADMIN_PASSWORD=<seed password>
+# If unset, the first boot auto-creates admin / passwd (change it immediately).
 docker compose up -d
 ```
 
-Open `http://<server>:8080` and log in with your password.
+Open `http://<server>:8080` and log in with `admin / passwd` (or your seed password).
+
+> ⚠️ **Rotate the default password on first login**: `admin / passwd` is a bootstrap convenience only. Change it via the user menu → *Change password*, then create additional admins / regular users under **Users**.
 
 ### Single `docker run`
 
@@ -25,6 +28,7 @@ docker run -d \
   --network host \
   --cap-add NET_ADMIN \
   -v $PWD/data:/data \
+  # Optional: set seed password; omit to fall back to admin/passwd on first boot.
   -e PORTPASS_ADMIN_PASSWORD="change-me" \
   ghcr.io/teacat99/portpass:latest
 ```
@@ -48,8 +52,10 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 - Multiple backends: iptables / nftables / ufw / firewalld, IPv4 & IPv6
 - Installable PWA with offline shell caching
 - Three auth modes: password + JWT / IP whitelist / none
-- Full audit log
-- Chinese & English UI, mobile-first responsive
+- **Multi-user**: multiple admins + normal users, bcrypt-hashed passwords persisted to DB, self-service *Change password*
+- **Port policy**: admins decide which preset ports & max duration normal users may open
+- Full audit log (`user_id` + `created_by` captured on every rule)
+- Chinese & English UI, fully mobile-responsive (tables ↔ cards, stacked forms, 44px touch targets)
 
 ## Environment Variables
 
@@ -57,7 +63,8 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 | --- | --- | --- |
 | `PORTPASS_LISTEN` | `:8080` | HTTP listen address |
 | `PORTPASS_AUTH_MODE` | `password` | `password` / `ipwhitelist` / `none` |
-| `PORTPASS_ADMIN_PASSWORD` | — | Required when `AUTH_MODE=password` |
+| `PORTPASS_ADMIN_USERNAME` | `admin` | Seed admin username (first boot only) |
+| `PORTPASS_ADMIN_PASSWORD` | `passwd` | Seed admin password; falls back to `passwd` with a warning when unset on first boot; managed via UI thereafter |
 | `PORTPASS_ADMIN_IP_WHITELIST` | — | Comma-separated CIDRs; required for `ipwhitelist` |
 | `PORTPASS_TRUSTED_PROXIES` | — | Reverse-proxy CIDRs; enables `X-Forwarded-For` parsing |
 | `PORTPASS_FIREWALL_DRIVER` | `iptables` | `iptables` / `nftables` / `ufw` / `firewalld` / `mock` |
@@ -67,6 +74,31 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 | `PORTPASS_HISTORY_RETENTION_DAYS` | `30` | Audit-log retention |
 | `PORTPASS_MAX_RULES_PER_IP` | `20` | Concurrent rule quota per creator IP |
 | `PORTPASS_RATELIMIT_PER_MINUTE` | `10` | Create-rule rate per IP |
+
+## Multi-User & Port Policy
+
+All accounts live in SQLite (bcrypt hashed). The auth mode only decides which identity an API request assumes:
+
+| Mode | Identity source | Who manages accounts |
+| --- | --- | --- |
+| `password` | Login form → DB users | Any admin |
+| `ipwhitelist` | Matching CIDR → built-in **system admin** | Same (you can still create more accounts in UI) |
+| `none` | Anyone → system admin | Same (internal networks only) |
+
+**Admin rules**:
+
+1. On first boot, if `PORTPASS_ADMIN_PASSWORD` is unset, PortPass creates `admin / passwd` and prints a red warning — change it right away.
+2. **Multiple admins** may exist simultaneously; any admin can create / reset / disable accounts from `/users`.
+3. An admin **cannot delete / demote / disable themselves** (API replies `400 cannot modify ... on self`).
+4. There must always be **at least one active admin**; the last-admin deletion / demotion / disable is rejected.
+5. Deleting a user also revokes all their active firewall rules (driver entries are cleaned up too).
+
+**Port policy** (admin → user):
+
+- Edit each preset in **Settings → Preset ports** and toggle `user_allowed` + `max_duration_sec`.
+- Normal users only see and select `user_allowed=true` presets.
+- When a normal user creates/extends a rule, `duration_sec` must not exceed the preset's `max_duration_sec` (otherwise `400 duration exceeds allowed ...`).
+- Admins bypass the policy and can filter rules by owner with `GET /api/rules?user_id=<id>`.
 
 ## Choosing a Firewall Driver
 
@@ -95,6 +127,7 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 3. Prefer `ipwhitelist` mode in production
 4. Review the audit log regularly
 5. Keep `MAX_DURATION_HOURS` low (≤24) to avoid "temporary" rules becoming permanent
+6. **Rotate `admin / passwd` on day one**: the default seed is logged with a loud warning. Before exposing PortPass, change it via the UI and create individual admins per operator — always keep at least one admin account as a recovery anchor
 
 ## Benchmarks
 

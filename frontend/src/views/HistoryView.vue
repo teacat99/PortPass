@@ -3,9 +3,11 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import { listHistory } from '@/api/rules'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { Rule } from '@/api/types'
 
 const { t } = useI18n()
+const { isMobile } = useBreakpoint()
 
 const rules = ref<Rule[]>([])
 const total = ref(0)
@@ -46,6 +48,10 @@ function durationOf(r: Rule): string {
   return h > 0 ? `${h}h${m}m` : `${m}m`
 }
 
+function statusColor(s: string) {
+  return s === 'failed' ? 'red' : s === 'revoked' ? 'orange' : 'gray'
+}
+
 onMounted(reload)
 </script>
 
@@ -55,36 +61,39 @@ onMounted(reload)
       <a-button type="primary" @click="reload">{{ t('action.refresh') }}</a-button>
     </template>
 
-    <a-form :model="filter" layout="inline" style="margin-bottom: 12px">
-      <a-form-item :label="t('rules.port')">
-        <a-input-number v-model="filter.port" :min="1" :max="65535" allow-clear style="width: 140px" />
-      </a-form-item>
-      <a-form-item label="IP">
-        <a-input v-model="filter.ip" allow-clear style="width: 180px" />
-      </a-form-item>
-      <a-form-item :label="t('history.status')">
-        <a-select v-model="filter.status" allow-clear style="width: 160px">
-          <a-option value="expired">{{ t('status.expired') }}</a-option>
-          <a-option value="revoked">{{ t('status.revoked') }}</a-option>
-          <a-option value="failed">{{ t('status.failed') }}</a-option>
-        </a-select>
-      </a-form-item>
-      <a-form-item :label="t('history.filterFrom')">
-        <a-range-picker v-model="filter.range" show-time style="width: 360px" />
-      </a-form-item>
-      <a-form-item>
-        <a-button type="primary" @click="reload">{{ t('action.search') }}</a-button>
-      </a-form-item>
-    </a-form>
+    <!-- Filter bar: inline on desktop, stacked on mobile (see responsive.css
+         for the .portpass-filter-bar rule). -->
+    <div class="portpass-filter-bar filter-bar">
+      <a-input-number
+        v-model="filter.port"
+        :min="1"
+        :max="65535"
+        :placeholder="t('rules.port')"
+        allow-clear
+        style="width: 140px"
+      />
+      <a-input v-model="filter.ip" placeholder="IP" allow-clear style="width: 180px" />
+      <a-select v-model="filter.status" :placeholder="t('history.status')" allow-clear style="width: 160px">
+        <a-option value="expired">{{ t('status.expired') }}</a-option>
+        <a-option value="revoked">{{ t('status.revoked') }}</a-option>
+        <a-option value="failed">{{ t('status.failed') }}</a-option>
+      </a-select>
+      <a-range-picker v-model="filter.range" show-time style="min-width: 280px; flex: 1 1 280px" />
+      <a-button type="primary" @click="reload">{{ t('action.search') }}</a-button>
+    </div>
 
-    <a-table :loading="loading" :data="rules" :scroll="{ x: 880 }" :pagination="{ pageSize: 20, total }">
+    <a-table
+      v-if="!isMobile"
+      :loading="loading"
+      :data="rules"
+      :scroll="{ x: 880 }"
+      :pagination="{ pageSize: 20, total }"
+    >
       <template #columns>
         <a-table-column title="ID" data-index="id" :width="70" />
         <a-table-column :title="t('history.status')" data-index="status" :width="100">
           <template #cell="{ record }">
-            <a-tag :color="record.status === 'failed' ? 'red' : record.status === 'revoked' ? 'orange' : 'gray'">
-              {{ t(`status.${record.status}`) }}
-            </a-tag>
+            <a-tag :color="statusColor(record.status)">{{ t(`status.${record.status}`) }}</a-tag>
           </template>
         </a-table-column>
         <a-table-column :title="t('rules.source')" data-index="source_ip" />
@@ -92,6 +101,7 @@ onMounted(reload)
           <template #cell="{ record }">{{ record.port }}/{{ record.protocol }}</template>
         </a-table-column>
         <a-table-column :title="t('history.actor')" data-index="created_ip" />
+        <a-table-column title="User" data-index="created_by" :width="120" />
         <a-table-column :title="t('rules.createdAt')">
           <template #cell="{ record }">{{ dayjs(record.created_at).format('MM-DD HH:mm') }}</template>
         </a-table-column>
@@ -104,5 +114,33 @@ onMounted(reload)
         <a-table-column :title="t('rules.note')" data-index="note" ellipsis tooltip />
       </template>
     </a-table>
+
+    <div v-else class="portpass-card-list">
+      <a-empty v-if="!rules.length && !loading" />
+      <div v-for="r in rules" :key="r.id" class="portpass-card">
+        <h4>
+          #{{ r.id }}
+          <a-tag :color="statusColor(r.status)" size="small">{{ t(`status.${r.status}`) }}</a-tag>
+        </h4>
+        <div class="row"><span class="label">{{ t('rules.port') }}</span><span class="mono">{{ r.port }}/{{ r.protocol }}</span></div>
+        <div class="row"><span class="label">{{ t('rules.source') }}</span><span class="mono">{{ r.source_ip }}</span></div>
+        <div class="row"><span class="label">{{ t('history.actor') }}</span><span class="mono">{{ r.created_ip }}</span></div>
+        <div class="row"><span class="label">User</span><span>{{ r.created_by || '-' }}</span></div>
+        <div class="row"><span class="label">{{ t('rules.createdAt') }}</span><span>{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span></div>
+        <div class="row"><span class="label">{{ t('history.duration') }}</span><span>{{ durationOf(r) }}</span></div>
+        <div v-if="r.note" class="row"><span class="label">{{ t('rules.note') }}</span><span>{{ r.note }}</span></div>
+      </div>
+    </div>
   </a-card>
 </template>
+
+<style scoped>
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+</style>

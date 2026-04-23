@@ -12,6 +12,10 @@ RUN npm run build
 FROM golang:1.25-alpine AS backend
 WORKDIR /src
 RUN apk add --no-cache git
+# Allow overriding the Go module proxy at build time for environments where
+# proxy.golang.org is slow or unreachable (e.g. CN networks).
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
@@ -31,6 +35,7 @@ RUN apk add --no-cache \
       tzdata \
       iptables \
       ip6tables \
+      nftables \
  && adduser -D -u 10001 portpass \
  && mkdir -p /data \
  && chown portpass:portpass /data

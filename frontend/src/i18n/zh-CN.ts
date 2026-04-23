@@ -7,6 +7,7 @@ export default {
     home: '首页',
     rules: '规则',
     history: '历史',
+    users: '用户',
     settings: '设置'
   },
   action: {
@@ -23,7 +24,37 @@ export default {
     refresh: '刷新',
     login: '登录',
     logout: '退出',
-    search: '搜索'
+    search: '搜索',
+    change_password: '修改密码',
+    reset_password: '重置密码',
+    enable: '启用',
+    disable: '禁用',
+    new_user: '新建用户'
+  },
+  password: {
+    old: '原密码',
+    new: '新密码',
+    confirm: '确认新密码',
+    too_short: '密码至少 6 位',
+    mismatch: '两次输入不一致',
+    changed: '密码已更新'
+  },
+  users: {
+    title: '用户管理',
+    username: '用户名',
+    role: '角色',
+    disabled: '禁用',
+    enabled: '启用中',
+    createdAt: '创建时间',
+    actions: '操作',
+    deleteConfirm: '确定要删除该用户吗？其未过期的规则将被立即终止。',
+    roleAdmin: '管理员',
+    roleUser: '普通用户',
+    newUser: '新建用户',
+    editUser: '编辑用户',
+    resetPwd: '重置密码',
+    selfCannotModify: '不能修改自身的角色或禁用状态',
+    lastAdminWarn: '至少需要保留一位启用中的管理员'
   },
   home: {
     clientIP: '当前客户端 IP',
@@ -76,12 +107,18 @@ export default {
     firewallDriver: '防火墙驱动',
     maxDuration: '单条规则最大有效期（小时）',
     historyRetention: '历史保留天数',
-    trustedProxies: '可信反代 CIDR 列表'
+    trustedProxies: '可信反代 CIDR 列表',
+    userAllowed: '普通用户可用',
+    userAllowedHelp: '勾选后普通用户可在此端口创建规则',
+    maxDurationSec: '普通用户单次最大时长 (秒)',
+    maxDurationSecHelp: '0 表示不额外限制（仍受全局最大时长约束）'
   },
   login: {
     title: '登录 PortPass',
-    password: '管理员密码',
-    passwordPlaceholder: '输入密码进入管理界面',
+    username: '用户名',
+    usernamePlaceholder: '默认首次启动用户名为 admin',
+    password: '密码',
+    passwordPlaceholder: '首次启动默认密码为 passwd，请尽快修改',
     failed: '登录失败'
   },
   status: {
@@ -109,6 +146,9 @@ export default {
     ruleDuplicated: '规则已复制',
     presetSaved: '预设已保存',
     presetDeleted: '预设已删除',
+    userCreated: '用户已创建',
+    userUpdated: '用户已更新',
+    userDeleted: '用户已删除',
     loadFailed: '加载失败',
     invalidInput: '输入无效'
   }

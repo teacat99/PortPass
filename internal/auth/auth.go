@@ -11,60 +11,117 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/teacat99/PortPass/internal/config"
+	"github.com/teacat99/PortPass/internal/model"
 	"github.com/teacat99/PortPass/internal/netutil"
 )
+
+// UserRepo captures the parts of the user store that the authenticator
+// needs. Keeping it narrow lets the unit tests provide a lightweight fake
+// without booting a real SQLite database.
+type UserRepo interface {
+	GetUserByUsername(name string) (*model.User, error)
+	GetUserByID(id uint) (*model.User, error)
+}
 
 // Authenticator bundles login and middleware logic for a specific AuthMode.
 // It is constructed once during server bootstrap and reused across requests.
 type Authenticator struct {
 	cfg    *config.Config
 	secret []byte
+	users  UserRepo
+
+	// systemAdminID / systemAdminUsername identify the implicit actor for
+	// ipwhitelist / none modes. They are populated after the store seeds
+	// the admin account during bootstrap.
+	systemAdminID       uint
+	systemAdminUsername string
 }
 
-// New initialises an Authenticator. When AUTH_MODE=password and no JWT
-// secret is provided, a random secret is generated so each process run
-// invalidates tokens from previous runs (by design for single-user tool).
-func New(cfg *config.Config) *Authenticator {
+// Context keys used to propagate the authenticated principal to handlers.
+const (
+	ctxKeyUserID   = "pp_user_id"
+	ctxKeyUsername = "pp_username"
+	ctxKeyRole     = "pp_role"
+)
+
+// New initialises an Authenticator. When no JWT secret is configured we
+// derive a random one so tokens from previous processes are invalidated
+// (acceptable for a single-admin self-hosted tool).
+func New(cfg *config.Config, users UserRepo) *Authenticator {
 	secret := []byte(cfg.JWTSecret)
 	if len(secret) == 0 {
 		secret = randomSecret(32)
 	}
-	return &Authenticator{cfg: cfg, secret: secret}
+	return &Authenticator{cfg: cfg, secret: secret, users: users}
+}
+
+// SetSystemAdmin registers the built-in admin identity that non-password
+// modes should impersonate. Call once at bootstrap after SeedAdminIfEmpty.
+func (a *Authenticator) SetSystemAdmin(id uint, username string) {
+	a.systemAdminID = id
+	a.systemAdminUsername = username
 }
 
 // Middleware is the shared gate used by /api/* (login/status endpoints are
 // mounted before this middleware so they remain reachable). Behaviour per
 // mode:
 //
-//   - password     : requires a valid JWT in Authorization header.
-//   - ipwhitelist  : requires the resolved client IP to be in the whitelist.
-//   - none         : always allow.
+//   - password     : requires a valid JWT whose user is still active.
+//   - ipwhitelist  : requires the resolved client IP to be in the whitelist;
+//                    the request is executed as the built-in system admin.
+//   - none         : always allow; executed as the system admin.
 func (a *Authenticator) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		switch a.cfg.AuthMode {
 		case config.AuthModePassword:
-			if !a.checkJWT(c) {
+			ok, u := a.checkJWT(c)
+			if !ok {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorised"})
 				return
 			}
+			a.setPrincipal(c, u.ID, u.Username, u.Role)
 		case config.AuthModeIPWhitelist:
 			if !a.checkIP(c) {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "ip not permitted"})
 				return
 			}
+			a.setPrincipal(c, a.systemAdminID, a.systemAdminUsername, model.RoleAdmin)
 		case config.AuthModeNone:
-			// No-op; backend intentionally unprotected (internal networks only).
+			a.setPrincipal(c, a.systemAdminID, a.systemAdminUsername, model.RoleAdmin)
 		}
 		c.Next()
 	}
 }
 
-// LoginHandler verifies the admin password and returns a signed JWT. Only
-// wired when AUTH_MODE=password.
+func (a *Authenticator) setPrincipal(c *gin.Context, id uint, username, role string) {
+	c.Set(ctxKeyUserID, id)
+	c.Set(ctxKeyUsername, username)
+	c.Set(ctxKeyRole, role)
+}
+
+// Principal reads the authenticated user attached by the middleware. It
+// returns zero values when the context has not passed through the gate.
+func Principal(c *gin.Context) (id uint, username, role string) {
+	if v, ok := c.Get(ctxKeyUserID); ok {
+		id, _ = v.(uint)
+	}
+	if v, ok := c.Get(ctxKeyUsername); ok {
+		username, _ = v.(string)
+	}
+	if v, ok := c.Get(ctxKeyRole); ok {
+		role, _ = v.(string)
+	}
+	return
+}
+
+// LoginHandler authenticates against the users table (bcrypt) and returns
+// a signed JWT. Password auth is the only mode that exposes this endpoint.
 func (a *Authenticator) LoginHandler(c *gin.Context) {
 	var req struct {
+		Username string `json:"username"`
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -75,18 +132,42 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password auth disabled"})
 		return
 	}
-	// Constant-time comparison guards against timing attacks, even though
-	// for a single-admin single-password tool it is mostly theatre.
-	if !constantTimeEq(req.Password, a.cfg.AdminPassword) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
-		return
+	username := strings.TrimSpace(req.Username)
+	if username == "" {
+		// Legacy single-user clients may still send only {password}; in
+		// that case we default to the configured seed admin username so
+		// the existing login flow keeps working.
+		username = a.cfg.AdminUsername
+		if username == "" {
+			username = "admin"
+		}
 	}
-	tok, err := a.sign()
+	u, err := a.users.GetUserByUsername(username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"token": tok})
+	if u == nil || u.Disabled || u.PasswordHash == "" {
+		// Do a dummy bcrypt compare so the response timing does not leak
+		// whether the username exists.
+		_ = bcrypt.CompareHashAndPassword([]byte("$2a$10$invalidinvalidinvalidinvaOZQZQ0ZQZQZQZQZQZQZQZQZQZQZQZQO"), []byte(req.Password))
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	tok, err := a.sign(u)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"token":    tok,
+		"username": u.Username,
+		"role":     u.Role,
+	})
 }
 
 // StatusHandler exposes enough metadata for the frontend router to decide
@@ -98,21 +179,27 @@ func (a *Authenticator) StatusHandler(c *gin.Context) {
 	})
 }
 
-// sign issues a JWT with a 24h expiry. Admin role is implicit - PortPass
-// currently has only one role.
-func (a *Authenticator) sign() (string, error) {
+// sign issues a JWT with a 24h expiry, including the authenticated user's
+// id / username / role so downstream handlers can authorise actions.
+func (a *Authenticator) sign(u *model.User) (string, error) {
 	claims := jwt.MapClaims{
-		"sub": "admin",
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(24 * time.Hour).Unix(),
+		"sub":      u.Username,
+		"uid":      u.ID,
+		"role":     u.Role,
+		"username": u.Username,
+		"iat":      time.Now().Unix(),
+		"exp":      time.Now().Add(24 * time.Hour).Unix(),
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(a.secret)
 }
 
-func (a *Authenticator) checkJWT(c *gin.Context) bool {
+// checkJWT validates the bearer token and returns the active user behind
+// it. An account that has since been disabled or deleted rejects the
+// request even if the token has not yet expired.
+func (a *Authenticator) checkJWT(c *gin.Context) (bool, *model.User) {
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
-		return false
+		return false, nil
 	}
 	raw := strings.TrimPrefix(header, "Bearer ")
 	tok, err := jwt.Parse(raw, func(t *jwt.Token) (any, error) {
@@ -122,9 +209,22 @@ func (a *Authenticator) checkJWT(c *gin.Context) bool {
 		return a.secret, nil
 	})
 	if err != nil || !tok.Valid {
-		return false
+		return false, nil
 	}
-	return true
+	claims, ok := tok.Claims.(jwt.MapClaims)
+	if !ok {
+		return false, nil
+	}
+	uidFloat, _ := claims["uid"].(float64)
+	uid := uint(uidFloat)
+	if uid == 0 {
+		return false, nil
+	}
+	u, err := a.users.GetUserByID(uid)
+	if err != nil || u == nil || u.Disabled {
+		return false, nil
+	}
+	return true, u
 }
 
 func (a *Authenticator) checkIP(c *gin.Context) bool {
@@ -139,18 +239,6 @@ func (a *Authenticator) checkIP(c *gin.Context) bool {
 		}
 	}
 	return false
-}
-
-// constantTimeEq avoids short-circuiting that would leak password length.
-func constantTimeEq(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var diff byte
-	for i := 0; i < len(a); i++ {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
 }
 
 func randomSecret(n int) []byte {

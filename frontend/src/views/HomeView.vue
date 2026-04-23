@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Message, Notification } from '@arco-design/web-vue'
 import dayjs from 'dayjs'
 import { createRule, fetchClientIP, listPresets } from '@/api/rules'
 import type { PresetPort, Rule } from '@/api/types'
 import { useRulesStore } from '@/stores/rules'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
 const store = useRulesStore()
+const auth = useAuthStore()
 
 const clientIP = ref<string>('')
 const presets = ref<PresetPort[]>([])
@@ -23,13 +25,44 @@ const durationPreset = ref<number | undefined>(60 * 60)
 const customExpire = ref<string | undefined>(undefined)
 const note = ref<string>('')
 
-const durationOptions = [
+// Raw duration presets. For non-admin callers we filter out any option
+// that exceeds the port's MaxDurationSec (enforced by the backend as well).
+const rawDurationOptions = [
   { label: '15m', value: 15 * 60 },
   { label: '1h', value: 60 * 60 },
   { label: '4h', value: 4 * 60 * 60 },
   { label: '12h', value: 12 * 60 * 60 },
   { label: '24h', value: 24 * 60 * 60 }
 ]
+
+// activePreset is the preset matching the currently typed (port, protocol)
+// pair - the user may have picked it via the quick buttons, or typed a
+// matching port manually. It drives the user-facing policy hint and the
+// duration-button filtering.
+const activePreset = computed<PresetPort | null>(() => {
+  if (!port.value) return null
+  for (const p of presets.value) {
+    if (p.port !== port.value) continue
+    if (p.protocol === protocol.value || p.protocol === 'both') return p
+  }
+  return null
+})
+
+// Non-admin users cannot pick a duration longer than their preset allows.
+// Admins see the raw options unchanged.
+const durationOptions = computed(() => {
+  const max = auth.isAdmin ? 0 : activePreset.value?.max_duration_sec ?? 0
+  if (!max) return rawDurationOptions
+  return rawDurationOptions.filter((o) => o.value <= max)
+})
+
+// Whenever the filtered list shrinks, ensure the selected preset is still
+// present; otherwise snap to the largest option available.
+watch(durationOptions, (opts) => {
+  if (!durationPreset.value) return
+  if (opts.some((o) => o.value === durationPreset.value)) return
+  durationPreset.value = opts.length ? opts[opts.length - 1].value : undefined
+})
 
 const sourcePreview = computed(() => {
   switch (sourceMode.value) {
@@ -104,11 +137,14 @@ async function submit() {
         </a-form-item>
 
         <a-form-item :label="t('home.port')">
-          <a-input-number v-model="port" :min="1" :max="65535" :placeholder="t('home.portPlaceholder')" style="max-width: 200px" />
+          <a-input-number v-model="port" :min="1" :max="65535" :placeholder="t('home.portPlaceholder')" style="max-width: 240px" />
           <div class="preset-list">
             <a-button v-for="p in presets" :key="p.id" size="small" @click="applyPreset(p)">
-              {{ p.name }} ({{ p.port }})
+              {{ p.name }} ({{ p.port }}/{{ p.protocol }})
             </a-button>
+          </div>
+          <div v-if="!auth.isAdmin && activePreset?.max_duration_sec" class="preview">
+            Max {{ Math.floor(activePreset.max_duration_sec / 60) }} min
           </div>
         </a-form-item>
 

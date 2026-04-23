@@ -6,11 +6,13 @@ import dayjs from 'dayjs'
 import { duplicateRule, extendRule, terminateRule } from '@/api/rules'
 import { useRulesStore } from '@/stores/rules'
 import { formatRemaining, useNow } from '@/composables/countdown'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { Rule } from '@/api/types'
 
 const { t } = useI18n()
 const store = useRulesStore()
 const now = useNow(1000)
+const { isMobile } = useBreakpoint()
 
 const extendVisible = ref(false)
 const extendTarget = ref<Rule | null>(null)
@@ -67,6 +69,7 @@ async function onDuplicate(rule: Rule) {
     </template>
 
     <a-table
+      v-if="!isMobile"
       :loading="store.loading"
       :data="store.active"
       :pagination="false"
@@ -91,6 +94,7 @@ async function onDuplicate(rule: Rule) {
         <a-table-column :title="t('rules.createdAt')">
           <template #cell="{ record }">{{ dayjs(record.created_at).format('MM-DD HH:mm') }}</template>
         </a-table-column>
+        <a-table-column title="User" data-index="created_by" :width="120" />
         <a-table-column :title="t('rules.note')" data-index="note" ellipsis tooltip />
         <a-table-column :title="t('rules.actions')" :width="260">
           <template #cell="{ record }">
@@ -104,13 +108,31 @@ async function onDuplicate(rule: Rule) {
       </template>
     </a-table>
 
+    <!-- Mobile card layout: every row condenses to a self-contained card. -->
+    <div v-else class="portpass-card-list">
+      <a-empty v-if="!store.active.length && !store.loading" :description="t('rules.empty')" />
+      <div v-for="r in store.active" :key="r.id" class="portpass-card">
+        <h4>#{{ r.id }} <span class="mono">{{ r.port }}/{{ r.protocol }}</span></h4>
+        <div class="row"><span class="label">{{ t('rules.source') }}</span><span class="mono">{{ r.source_ip }}</span></div>
+        <div class="row"><span class="label">{{ t('rules.remaining') }}</span><span class="countdown">{{ formatRemaining(r.expire_at, now) }}</span></div>
+        <div class="row"><span class="label">{{ t('rules.createdAt') }}</span><span>{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span></div>
+        <div class="row"><span class="label">User</span><span>{{ r.created_by || '-' }}</span></div>
+        <div v-if="r.note" class="row"><span class="label">{{ t('rules.note') }}</span><span>{{ r.note }}</span></div>
+        <div class="actions">
+          <a-button size="medium" status="danger" @click="onTerminate(r)">{{ t('action.terminate') }}</a-button>
+          <a-button size="medium" @click="openExtend(r)">{{ t('action.extend') }}</a-button>
+          <a-button size="medium" @click="onDuplicate(r)">{{ t('action.duplicate') }}</a-button>
+        </div>
+      </div>
+    </div>
+
     <a-modal
       v-model:visible="extendVisible"
       :title="t('rules.extendDialog')"
       @ok="submitExtend"
     >
       <a-form-item :label="t('rules.extendAmount')">
-        <a-radio-group v-model="extendSec">
+        <a-radio-group v-model="extendSec" direction="vertical">
           <a-radio :value="15 * 60">15m</a-radio>
           <a-radio :value="60 * 60">1h</a-radio>
           <a-radio :value="4 * 60 * 60">4h</a-radio>
@@ -123,4 +145,5 @@ async function onDuplicate(rule: Rule) {
 
 <style scoped>
 .countdown { font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 600; color: var(--color-primary-6); }
+.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
 </style>

@@ -4,11 +4,20 @@ import "time"
 
 // Rule status enumeration.
 const (
-	StatusPending  = "pending"
-	StatusActive   = "active"
-	StatusExpired  = "expired"
-	StatusRevoked  = "revoked"
-	StatusFailed   = "failed"
+	StatusPending = "pending"
+	StatusActive  = "active"
+	StatusExpired = "expired"
+	StatusRevoked = "revoked"
+	StatusFailed  = "failed"
+)
+
+// User role enumeration. PortPass splits concerns into two roles:
+// admin owns the instance (user/preset management, unrestricted rule
+// creation) and user is limited to rules whose (port, protocol) is
+// whitelisted via PresetPort.UserAllowed and within MaxDurationSec.
+const (
+	RoleAdmin = "admin"
+	RoleUser  = "user"
 )
 
 // Protocol enumeration.
@@ -22,6 +31,7 @@ const (
 // specific source IP until ExpireAt elapses.
 type Rule struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
+	UserID       uint       `gorm:"index" json:"user_id"`
 	SourceIP     string     `gorm:"index;size:64" json:"source_ip"`
 	Port         int        `gorm:"index" json:"port"`
 	Protocol     string     `gorm:"size:8" json:"protocol"`
@@ -37,13 +47,31 @@ type Rule struct {
 	CommentTag   string     `gorm:"uniqueIndex;size:64" json:"comment_tag"`
 }
 
-// PresetPort is a reusable one-click port entry shown on the create-rule form.
+// PresetPort is a reusable port entry. Beyond being the UI quick-button it
+// doubles as the per-user port whitelist: non-admin users can only open a
+// (port, protocol) pair that matches a preset with UserAllowed=true, and
+// are bounded by MaxDurationSec (0 means inherit global cap).
 type PresetPort struct {
-	ID       uint   `gorm:"primaryKey" json:"id"`
-	Name     string `gorm:"size:32" json:"name"`
-	Port     int    `json:"port"`
-	Protocol string `gorm:"size:8" json:"protocol"`
-	Sort     int    `gorm:"column:sort_order" json:"sort"`
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	Name           string `gorm:"size:32" json:"name"`
+	Port           int    `json:"port"`
+	Protocol       string `gorm:"size:8" json:"protocol"`
+	Sort           int    `gorm:"column:sort_order" json:"sort"`
+	UserAllowed    bool   `gorm:"default:false" json:"user_allowed"`
+	MaxDurationSec int    `gorm:"default:0" json:"max_duration_sec"`
+}
+
+// User is an account stored in the local SQLite database. The password is
+// always persisted as a bcrypt hash; the plaintext is never stored nor
+// returned via JSON. Role governs what the user may see and do.
+type User struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	Username     string    `gorm:"size:64;uniqueIndex;not null" json:"username"`
+	PasswordHash string    `gorm:"size:128;not null" json:"-"`
+	Role         string    `gorm:"size:16;not null;default:user" json:"role"`
+	Disabled     bool      `gorm:"default:false" json:"disabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Setting is a free-form key/value configuration row. Used for runtime-mutable

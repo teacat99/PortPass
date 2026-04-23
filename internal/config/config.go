@@ -22,18 +22,19 @@ const (
 // All fields are populated from environment variables by Load. Sensible
 // defaults cover a typical single-host deployment; see README for full details.
 type Config struct {
-	Listen                 string
-	AuthMode               AuthMode
-	AdminPassword          string
-	AdminIPWhitelist       []*net.IPNet
-	TrustedProxies         []*net.IPNet
-	FirewallDriver         string
-	DataDir                string
-	HistoryRetentionDays   int
-	MaxDurationHours       int
-	MaxRulesPerIP          int
+	Listen                  string
+	AuthMode                AuthMode
+	AdminUsername           string
+	AdminPassword           string
+	AdminIPWhitelist        []*net.IPNet
+	TrustedProxies          []*net.IPNet
+	FirewallDriver          string
+	DataDir                 string
+	HistoryRetentionDays    int
+	MaxDurationHours        int
+	MaxRulesPerIP           int
 	RateLimitPerMinutePerIP int
-	JWTSecret              string
+	JWTSecret               string
 }
 
 // Load reads environment variables and returns a populated Config, applying
@@ -43,6 +44,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Listen:                  envOr("PORTPASS_LISTEN", ":8080"),
 		AuthMode:                AuthMode(strings.ToLower(envOr("PORTPASS_AUTH_MODE", string(AuthModePassword)))),
+		AdminUsername:           envOr("PORTPASS_ADMIN_USERNAME", "admin"),
 		AdminPassword:           os.Getenv("PORTPASS_ADMIN_PASSWORD"),
 		FirewallDriver:          strings.ToLower(envOr("PORTPASS_FIREWALL_DRIVER", "iptables")),
 		DataDir:                 envOr("PORTPASS_DATA_DIR", "/data"),
@@ -71,9 +73,11 @@ func Load() (*Config, error) {
 	}
 	cfg.TrustedProxies = proxies
 
-	if cfg.AuthMode == AuthModePassword && cfg.AdminPassword == "" {
-		return nil, fmt.Errorf("PORTPASS_AUTH_MODE=password requires PORTPASS_ADMIN_PASSWORD")
-	}
+	// PORTPASS_ADMIN_PASSWORD is no longer required in password mode: the
+	// store seeds a default admin/passwd on first boot (with a log warning)
+	// when the users table is empty, and after that credentials are
+	// managed via the UI. The env var still has an effect when present
+	// (used as the seed password on the very first boot only).
 	if cfg.AuthMode == AuthModeIPWhitelist && len(cfg.AdminIPWhitelist) == 0 {
 		return nil, fmt.Errorf("PORTPASS_AUTH_MODE=ipwhitelist requires PORTPASS_ADMIN_IP_WHITELIST")
 	}

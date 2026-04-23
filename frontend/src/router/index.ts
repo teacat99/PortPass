@@ -9,7 +9,18 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'home', component: () => import('@/views/HomeView.vue') },
       { path: 'rules', name: 'rules', component: () => import('@/views/RulesView.vue') },
       { path: 'history', name: 'history', component: () => import('@/views/HistoryView.vue') },
-      { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') }
+      {
+        path: 'users',
+        name: 'users',
+        meta: { adminOnly: true },
+        component: () => import('@/views/UsersView.vue')
+      },
+      {
+        path: 'settings',
+        name: 'settings',
+        meta: { adminOnly: true },
+        component: () => import('@/views/SettingsView.vue')
+      }
     ]
   },
   { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') }
@@ -20,13 +31,22 @@ const router = createRouter({
   routes
 })
 
-// Minimal guard: when password auth is enforced and we have no token, divert
-// everything except /login to the login screen. In IP-whitelist / none modes
-// the backend enforces authorisation so the guard stays out of the way.
-router.beforeEach((to, _from, next) => {
+// Router guard. Two concerns run here: redirecting unauthenticated users
+// to /login (password mode only), and blocking non-admins from adminOnly
+// routes even if they know the direct URL. The `me` object may not have
+// loaded yet on a hard refresh so we lazy-fetch before deciding.
+router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore()
   if (to.name !== 'login' && auth.required && !auth.token) {
     next({ name: 'login', query: { redirect: to.fullPath } })
+    return
+  }
+  // Ensure we know the caller's role before evaluating adminOnly routes.
+  if (to.name !== 'login' && auth.token && !auth.me) {
+    await auth.fetchMe()
+  }
+  if (to.meta?.adminOnly && auth.me && auth.me.role !== 'admin') {
+    next({ name: 'home' })
     return
   }
   next()

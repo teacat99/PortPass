@@ -1,5 +1,6 @@
 export interface Rule {
   id: number
+  user_id: number
   source_ip: string
   port: number
   protocol: string
@@ -21,6 +22,26 @@ export interface PresetPort {
   port: number
   protocol: string
   sort: number
+  user_allowed: boolean
+  max_duration_sec: number
+}
+
+export type Role = 'admin' | 'user'
+
+export interface User {
+  id: number
+  username: string
+  role: Role
+  disabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface Me {
+  id: number
+  username: string
+  role: Role
+  auth_mode: 'password' | 'ipwhitelist' | 'none'
 }
 
 export interface Setting {
