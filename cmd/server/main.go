@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/teacat99/PortPass/internal/api"
+	"github.com/teacat99/PortPass/internal/auth"
 	"github.com/teacat99/PortPass/internal/config"
 	"github.com/teacat99/PortPass/internal/firewall"
 	"github.com/teacat99/PortPass/internal/lifecycle"
@@ -61,7 +62,8 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	server := api.New(cfg, s, lm)
+	authn := auth.New(cfg)
+	server := api.New(cfg, s, lm, authn)
 	server.Router(r)
 
 	mountStatic(r)

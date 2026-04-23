@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/teacat99/PortPass/internal/auth"
 	"github.com/teacat99/PortPass/internal/config"
 	"github.com/teacat99/PortPass/internal/lifecycle"
 	"github.com/teacat99/PortPass/internal/model"
@@ -24,26 +25,32 @@ type Server struct {
 	cfg       *config.Config
 	store     *store.Store
 	lifecycle *lifecycle.Manager
+	auth      *auth.Authenticator
 	limiter   *ipRateLimiter
 }
 
 // New builds a Server with all collaborators supplied. Callers must not use
 // nil pointers; the API package is a thin coordinator and does not itself
 // instantiate these dependencies.
-func New(cfg *config.Config, s *store.Store, lm *lifecycle.Manager) *Server {
+func New(cfg *config.Config, s *store.Store, lm *lifecycle.Manager, a *auth.Authenticator) *Server {
 	return &Server{
 		cfg:       cfg,
 		store:     s,
 		lifecycle: lm,
+		auth:      a,
 		limiter:   newIPRateLimiter(cfg.RateLimitPerMinutePerIP, time.Minute),
 	}
 }
 
-// Router mounts the /api/* tree on a gin.Engine. Auth middlewares are
-// attached in M4 and apply across the whole /api group. Static file serving
-// (for embedded frontend) is wired separately by the caller in main.
+// Router mounts the /api/* tree on a gin.Engine. Authentication is enforced
+// by the auth middleware; /auth/* endpoints are mounted before the gate so
+// unauthenticated clients can still log in and discover auth mode.
 func (s *Server) Router(engine *gin.Engine) {
-	g := engine.Group("/api")
+	pub := engine.Group("/api")
+	pub.GET("/auth/status", s.auth.StatusHandler)
+	pub.POST("/auth/login", s.auth.LoginHandler)
+
+	g := engine.Group("/api", s.auth.Middleware())
 
 	g.GET("/health", s.handleHealth)
 	g.GET("/client-ip", s.handleClientIP)
