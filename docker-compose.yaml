@@ -1,0 +1,31 @@
+# PortPass reference deployment.
+#
+# Notes:
+#   - network_mode: host is required so the firewall rules affect real inbound
+#     traffic; without it, rules only apply to the container's own netns.
+#   - cap_add: NET_ADMIN gives iptables/nftables the privileges they need
+#     without running the whole container as --privileged.
+#   - Data volume holds the SQLite store and audit logs; back it up.
+services:
+  portpass:
+    image: ghcr.io/teacat99/portpass:latest
+    container_name: portpass
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./data:/data
+    environment:
+      PORTPASS_LISTEN: ":8080"
+      PORTPASS_AUTH_MODE: "password"
+      PORTPASS_ADMIN_PASSWORD: "change-me"
+      PORTPASS_FIREWALL_DRIVER: "iptables"
+      # PORTPASS_JWT_SECRET: ""         # leave blank to rotate on each restart
+      # PORTPASS_ADMIN_IP_WHITELIST: "" # e.g. "10.0.0.0/8,192.168.0.0/16"
+      # PORTPASS_TRUSTED_PROXIES: ""    # when behind a reverse proxy
+      PORTPASS_MAX_DURATION_HOURS: "24"
+      PORTPASS_HISTORY_RETENTION_DAYS: "30"
+      PORTPASS_MAX_RULES_PER_IP: "20"
+      PORTPASS_RATELIMIT_PER_MINUTE: "10"
+      TZ: "Asia/Shanghai"

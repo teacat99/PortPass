@@ -4,50 +4,152 @@
 
 [English](./README.en.md) | 中文
 
+## 快速开始
+
+### Docker Compose（推荐）
+
+```bash
+curl -LO https://raw.githubusercontent.com/teacat99/PortPass/main/docker-compose.yaml
+# 编辑 docker-compose.yaml，至少修改 PORTPASS_ADMIN_PASSWORD
+docker compose up -d
+```
+
+访问 `http://<server>:8080`，使用配置的密码登录。
+
+### 单命令 Docker
+
+```bash
+docker run -d \
+  --name portpass \
+  --restart unless-stopped \
+  --network host \
+  --cap-add NET_ADMIN \
+  -v $PWD/data:/data \
+  -e PORTPASS_ADMIN_PASSWORD="change-me" \
+  ghcr.io/teacat99/portpass:latest
+```
+
+> **注意**：`--network host` 与 `--cap-add NET_ADMIN` 是必需的。容器中的 iptables 只能影响容器自己的网络命名空间，除非使用 host 网络。
+
+### 从源码构建
+
+```bash
+# 前端
+cd frontend && npm ci && npm run build && cd ..
+# 后端（含 embed 前端）
+go build -trimpath -ldflags="-s -w" -o portpass ./cmd/server/
+PORTPASS_ADMIN_PASSWORD=dev ./portpass
+```
+
 ## 远程仓库
 
 - **当前状态**：仅本地仓库，暂未关联远程
 - **建议远端**：`github.com/teacat99/PortPass`
-- 开通远程仓库后，可通过：
+- 开通远程仓库后：
   ```bash
   git remote add origin git@github.com:teacat99/PortPass.git
   git push -u origin main
   ```
 
-## 项目简介
-
-PortPass 是一个轻量级的临时端口开放管理工具，解决"非 7×24 小时需要暴露的服务如何安全开放"这一痛点：
-
-- 通过 Web 页面（支持 PWA 安装到手机桌面）下发"白名单 IP + 端口 + 有效期"规则
-- 到期**自动回收**，避免手改 iptables 后忘记关闭造成的长期暴露风险
-- 支持 iptables / nftables / ufw / firewalld 多种防火墙后端
-- 规则持久化 + 启动对账 + 定时 reconcile，确保"无论什么情况规则都不会悬挂"
-- 单 Docker 容器部署，镜像目标 < 30MB，常驻内存 < 50MB
-
 ## 核心特性
 
 - ✅ **临时端口开放**：指定来源 IP / 端口 / 协议 / 有效期，到期自动清理
-- ✅ **自动 IP 识别**：页面自动填入当前客户端公网 IP（支持反代 `X-Forwarded-For`）
-- ✅ **预设快捷操作**：SSH / RDP / MySQL 等常用端口一键选择
-- ✅ **规则生命周期可靠性**：AfterFunc 到期 + 30s reconcile + 启动对账
-- ✅ **PWA 支持**：可安装到手机/桌面，离线缓存
+- ✅ **客户端 IP 自动识别**：首页自动填入当前公网 IP（支持 `X-Forwarded-For`）
+- ✅ **预设快捷端口**：SSH / RDP / MySQL / Redis 等一键选择
+- ✅ **规则生命周期可靠性**：`time.AfterFunc` 主通道 + 30s 周期对账 + 启动对账
+- ✅ **多防火墙驱动**：iptables / nftables / ufw / firewalld，IPv4+IPv6
+- ✅ **PWA**：可安装到手机桌面，Workbox 离线缓存
 - ✅ **多鉴权模式**：密码 + JWT / IP 白名单 / 无鉴权（内网）
 - ✅ **审计日志**：所有规则变更可追溯
+- ✅ **中英双语 + 移动端自适应**
 
-## 开发进度
+## 环境变量
 
-项目按 M1-M5 里程碑推进，当前位于 **M0：项目骨架**。详见 [plan.md](./plan.md)。
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORTPASS_LISTEN` | `:8080` | HTTP 监听地址 |
+| `PORTPASS_AUTH_MODE` | `password` | `password` / `ipwhitelist` / `none` |
+| `PORTPASS_ADMIN_PASSWORD` | —— | `AUTH_MODE=password` 时必填 |
+| `PORTPASS_ADMIN_IP_WHITELIST` | —— | 逗号分隔的 CIDR 列表，`ipwhitelist` 模式下必填 |
+| `PORTPASS_TRUSTED_PROXIES` | —— | 反代 CIDR；配置后才解析 `X-Forwarded-For` |
+| `PORTPASS_FIREWALL_DRIVER` | `iptables` | `iptables` / `nftables` / `ufw` / `firewalld` / `mock` |
+| `PORTPASS_DATA_DIR` | `/data` | SQLite 与日志目录 |
+| `PORTPASS_JWT_SECRET` | 随机 | 为空则每次启动重新生成（旧 token 失效） |
+| `PORTPASS_MAX_DURATION_HOURS` | `24` | 单条规则最大有效期 |
+| `PORTPASS_HISTORY_RETENTION_DAYS` | `30` | 审计日志保留天数 |
+| `PORTPASS_MAX_RULES_PER_IP` | `20` | 同一创建者并发规则上限 |
+| `PORTPASS_RATELIMIT_PER_MINUTE` | `10` | 每 IP 每分钟创建速率 |
 
-## 开发与构建（预留）
+## 防火墙驱动选择
 
-完整 README 将在 M5 里程碑完善，包括：
+| 驱动 | 适用场景 | 注意事项 |
+| --- | --- | --- |
+| `iptables` | 通用 Linux，默认选择 | 需要 `iptables` 命令 + `NET_ADMIN`；IPv6 通过 `ip6tables` 自动处理 |
+| `nftables` | 新发行版（Debian 11+、RHEL 9+） | PortPass 独占 `inet portpass` table，与操作员规则互不干扰 |
+| `ufw` | 已启用 ufw 的 Ubuntu | PortPass 规则以 `# portpass:<id>` 注释可见 |
+| `firewalld` | RHEL / CentOS / Fedora | 使用 `firewall-cmd --add-rich-rule`（运行时，不写入 permanent） |
+| `mock` | 开发/测试 | 仅内存状态，不操作真实防火墙 |
 
-- 快速开始（Docker / docker-compose）
-- 完整环境变量表
-- 防火墙驱动选择建议
-- 安全最佳实践
-- 开发者指南
+## 可靠性设计
+
+1. **主通道**：每条规则通过 `time.AfterFunc` 在 `expire_at` 精确触发移除
+2. **周期对账**：每 30s 扫描 DB × 实时防火墙状态，修复以下漂移
+   - 已过期但仍存活的规则（例如 `AfterFunc` 因进程睡眠错过触发）
+   - DB 中存在、防火墙中丢失（例如操作员手动执行过 `iptables -F`）
+   - 防火墙中存在、DB 中无（孤儿清理）
+3. **启动对账**：HTTP 服务启动前先做一次完整对账，避免刚启动时状态不一致
+4. **SIGTERM 不清理**：容器重启不会被视为"撤销"，下次启动对账会恢复计时器
+
+## 架构速览
+
+```
+┌──────────────┐  HTTPS/HTTP  ┌────────────────────────────────┐
+│ 浏览器/PWA   │ ───────────▶ │ PortPass (单二进制)            │
+└──────────────┘              │  ├─ Gin API                     │
+                              │  ├─ Auth (JWT / IP / none)      │
+                              │  ├─ Lifecycle Manager           │
+                              │  │   ├─ time.AfterFunc          │
+                              │  │   └─ 30s reconcile           │
+                              │  ├─ Store (SQLite via GORM)     │
+                              │  └─ FirewallDriver              │
+                              │      ├─ iptables / ip6tables    │
+                              │      ├─ nftables (inet portpass)│
+                              │      ├─ ufw                     │
+                              │      └─ firewalld (rich-rule)   │
+                              └────────────────────────────────┘
+```
+
+## 开发指南
+
+```bash
+# 后端（热重载可选使用 air）
+PORTPASS_ADMIN_PASSWORD=dev PORTPASS_FIREWALL_DRIVER=mock \
+  go run ./cmd/server
+
+# 前端（代理到 :8080）
+cd frontend && npm run dev
+
+# 单元测试
+go test ./...
+```
+
+## 安全建议
+
+1. **管理界面一定要走 HTTPS**：建议在 Caddy/Nginx 后面，把真实客户端 IP 通过 `X-Forwarded-For` 转发
+2. 将 `PORTPASS_TRUSTED_PROXIES` 精确配置为反代 CIDR，避免 XFF 伪造
+3. 生产环境优先使用 `ipwhitelist` 模式（天然免于密码爆破）
+4. 定期检查 `审计日志`，关注异常创建者 IP
+5. `PORTPASS_MAX_DURATION_HOURS` 建议≤24，避免"临时"变"永久"
+
+## 基准测试
+
+| 项目 | 指标 |
+| --- | --- |
+| Docker 镜像大小 | ~40 MB（含 iptables/ip6tables、前端资源） |
+| 常驻内存 | ~40 MB |
+| 创建 1 条 iptables 规则延迟 | < 50 ms |
+| 1000 条规则 reconcile | < 500 ms |
 
 ## License
 
-[MIT](./LICENSE)（M5 里程碑添加）
+[MIT](./LICENSE)
