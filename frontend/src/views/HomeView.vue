@@ -15,6 +15,7 @@ import { Message } from '@/lib/toast'
 
 import CopyableText from '@/components/CopyableText.vue'
 import CountdownChip from '@/components/CountdownChip.vue'
+import DateTimePicker from '@/components/DateTimePicker.vue'
 import PortSetInput from '@/components/PortSetInput.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -363,10 +364,9 @@ const sourceOptions = computed<SourceOpt[]>(() => [
             @click="pickDuration(opt.value)"
           >{{ opt.label }}</button>
 
-          <input
+          <DateTimePicker
             v-model="form.customExpire"
-            type="datetime-local"
-            class="h-9 px-3 rounded-md border border-input bg-transparent text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="w-[220px]"
             :placeholder="t('home.durationCustom')"
           />
         </div>

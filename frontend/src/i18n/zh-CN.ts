@@ -226,10 +226,15 @@ export default {
   login: {
     title: '登录 PortPass',
     username: '用户名',
-    usernamePlaceholder: '默认首次启动用户名为 admin',
+    usernamePlaceholder: 'admin',
     password: '密码',
-    passwordPlaceholder: '首次启动默认密码为 passwd，请尽快修改',
-    failed: '登录失败'
+    passwordPlaceholder: 'passwd',
+    failed: '登录失败',
+    error: {
+      invalid_credentials: '用户名或密码错误',
+      auth_disabled: '当前部署未启用密码登录',
+      bad_request: '请求格式错误'
+    }
   },
   status: {
     pending: '等待中',

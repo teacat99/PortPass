@@ -125,11 +125,14 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 		Password string `json:"password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		// `code` is a stable machine-readable discriminator the frontend
+		// maps to localised user-facing strings; `error` is the English
+		// fallback kept for non-browser clients and log scrapers.
+		c.JSON(http.StatusBadRequest, gin.H{"code": "bad_request", "error": err.Error()})
 		return
 	}
 	if a.cfg.AuthMode != config.AuthModePassword {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "password auth disabled"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": "auth_disabled", "error": "password auth disabled"})
 		return
 	}
 	username := strings.TrimSpace(req.Username)
@@ -144,18 +147,18 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 	}
 	u, err := a.users.GetUserByUsername(username)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "internal", "error": err.Error()})
 		return
 	}
 	if u == nil || u.Disabled || u.PasswordHash == "" {
 		// Do a dummy bcrypt compare so the response timing does not leak
 		// whether the username exists.
 		_ = bcrypt.CompareHashAndPassword([]byte("$2a$10$invalidinvalidinvalidinvaOZQZQ0ZQZQZQZQZQZQZQZQZQZQZQZQO"), []byte(req.Password))
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": "invalid_credentials", "error": "invalid credentials"})
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": "invalid_credentials", "error": "invalid credentials"})
 		return
 	}
 	tok, err := a.sign(u)

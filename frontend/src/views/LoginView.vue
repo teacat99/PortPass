@@ -13,10 +13,7 @@ const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
-// Pre-fill username with the conventional default so fresh installs can be
-// signed into on a single tap. Real deployments override after rotating
-// the seed password anyway.
-const username = ref('admin')
+const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
@@ -33,7 +30,17 @@ async function submit(e?: Event) {
     const redirect = (route.query.redirect as string) || '/'
     router.replace(redirect)
   } catch (err: any) {
-    Message.error(err?.response?.data?.error ?? t('login.failed'))
+    // Backend returns `{code, error}` for auth/login failures. We prefer
+    // the localised `login.error.<code>` bundle so that toggling locale
+    // translates the message immediately; the English `error` string is
+    // only used as a final fallback for unrecognised codes.
+    const code = err?.response?.data?.code as string | undefined
+    const english = err?.response?.data?.error as string | undefined
+    const localisedKey = code ? `login.error.${code}` : ''
+    const translated = localisedKey && t(localisedKey) !== localisedKey
+      ? t(localisedKey)
+      : undefined
+    Message.error(translated ?? english ?? t('login.failed'))
   } finally {
     loading.value = false
   }

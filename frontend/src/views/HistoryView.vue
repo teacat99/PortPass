@@ -6,6 +6,7 @@ import { RefreshCw, Search as SearchIcon } from 'lucide-vue-next'
 import { listHistory } from '@/api/rules'
 import type { Rule } from '@/api/types'
 
+import DateTimePicker from '@/components/DateTimePicker.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import CopyableText from '@/components/CopyableText.vue'
@@ -131,19 +132,11 @@ onMounted(reload)
         </div>
         <div class="flex flex-col gap-1.5 col-span-1">
           <label class="text-xs text-muted-foreground font-medium">{{ t('history.filterFrom') }}</label>
-          <input
-            v-model="filter.from"
-            type="datetime-local"
-            class="h-9 px-3 rounded-md border border-input bg-transparent text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
+          <DateTimePicker v-model="filter.from" />
         </div>
         <div class="flex flex-col gap-1.5 col-span-1">
           <label class="text-xs text-muted-foreground font-medium">{{ t('history.filterTo') }}</label>
-          <input
-            v-model="filter.to"
-            type="datetime-local"
-            class="h-9 px-3 rounded-md border border-input bg-transparent text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
+          <DateTimePicker v-model="filter.to" />
         </div>
         <div class="flex gap-2 col-span-2 md:col-span-1 justify-end">
           <Button variant="outline" size="sm" @click="reset">重置</Button>

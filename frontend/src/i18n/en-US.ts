@@ -226,10 +226,15 @@ export default {
   login: {
     title: 'Sign in to PortPass',
     username: 'Username',
-    usernamePlaceholder: 'Default first-boot username is admin',
+    usernamePlaceholder: 'admin',
     password: 'Password',
-    passwordPlaceholder: 'First-boot default is passwd - please change it',
-    failed: 'Login failed'
+    passwordPlaceholder: 'passwd',
+    failed: 'Login failed',
+    error: {
+      invalid_credentials: 'Incorrect username or password',
+      auth_disabled: 'Password login is disabled in this deployment',
+      bad_request: 'Malformed request'
+    }
   },
   status: {
     pending: 'Pending',

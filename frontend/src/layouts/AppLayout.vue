@@ -159,8 +159,8 @@ async function submitPassword() {
       long pages. Use backdrop-blur so content scrolling beneath feels
       native without the header obscuring it.
     -->
-    <header class="sticky top-0 z-30 h-14 md:h-16 border-b border-border bg-card/95 backdrop-blur flex items-center justify-between px-3 md:px-5">
-      <div class="flex items-center gap-3 min-w-0">
+    <header class="sticky top-0 z-30 h-14 md:h-16 border-b border-border bg-card/95 backdrop-blur flex items-center justify-between gap-4 px-3 md:px-5">
+      <div class="flex items-center gap-3 min-w-0 shrink-0">
         <img :src="logoUrl" alt="PortPass" class="size-8 rounded-md shrink-0" />
         <div class="flex flex-col min-w-0">
           <span class="font-semibold text-sm md:text-base leading-tight truncate">{{ t('app.title') }}</span>
@@ -168,7 +168,29 @@ async function submitPassword() {
         </div>
       </div>
 
-      <div class="flex items-center gap-1">
+      <!--
+        Desktop primary nav sits in the header (md+ only). On mobile this
+        collapses and navigation lives in the bottom dock. This replaces
+        the old left aside so the page gets the full horizontal width for
+        tables / forms.
+      -->
+      <nav class="hidden md:flex items-center gap-1 flex-1 min-w-0" aria-label="primary">
+        <button
+          v-for="n in navItems"
+          :key="n.key"
+          type="button"
+          class="group inline-flex items-center gap-2 px-3 h-9 rounded-md text-sm font-medium transition-colors"
+          :class="currentKey === n.key
+            ? 'bg-primary/10 text-primary'
+            : 'text-muted-foreground hover:bg-accent hover:text-foreground'"
+          @click="navigate(n.key)"
+        >
+          <component :is="n.icon" class="size-4" />
+          <span>{{ n.label }}</span>
+        </button>
+      </nav>
+
+      <div class="flex items-center gap-1 shrink-0">
         <Tooltip>
           <TooltipTrigger as-child>
             <Button variant="ghost" size="icon" aria-label="theme" @click="theme.toggle()">
@@ -237,46 +259,17 @@ async function submitPassword() {
       </div>
     </header>
 
-    <div class="flex-1 flex">
-      <!--
-        Desktop sidebar (md+ only). Uses plain button nav so active/hover
-        visuals are fully controlled. On mobile this collapses; primary
-        navigation then lives in the bottom dock.
-      -->
-      <aside class="hidden md:flex w-56 shrink-0 border-r border-border bg-card flex-col">
-        <nav class="flex-1 p-3 flex flex-col gap-1">
-          <button
-            v-for="n in navItems"
-            :key="n.key"
-            type="button"
-            class="group relative flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-foreground"
-            :class="{
-              'bg-primary/10 text-primary': currentKey === n.key,
-              'hover:text-foreground': currentKey !== n.key
-            }"
-            @click="navigate(n.key)"
-          >
-            <span
-              v-if="currentKey === n.key"
-              class="absolute left-0 top-2 bottom-2 w-[3px] rounded-r bg-primary"
-            />
-            <component :is="n.icon" class="size-4" />
-            <span>{{ n.label }}</span>
-          </button>
-        </nav>
-        <div class="p-3 border-t border-border text-[11px] text-muted-foreground">
-          v0.1 · {{ auth.mode }}
-        </div>
-      </aside>
+    <main class="flex-1 min-w-0 max-w-7xl w-full mx-auto px-3 md:px-6 py-4 md:py-6 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:pb-6">
+      <router-view v-slot="{ Component }">
+        <transition name="fade" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </router-view>
+    </main>
 
-      <main class="flex-1 min-w-0 px-3 md:px-6 py-4 md:py-6 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:pb-6">
-        <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" />
-          </transition>
-        </router-view>
-      </main>
-    </div>
+    <footer class="hidden md:block border-t border-border py-2 px-5 text-[11px] text-muted-foreground">
+      v0.1 · {{ auth.mode }}
+    </footer>
 
     <!--
       Mobile bottom dock. Rendered unconditionally and hidden on md+ via
