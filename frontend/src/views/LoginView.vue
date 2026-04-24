@@ -2,16 +2,26 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { Languages } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
+import { setLocale } from '@/i18n'
 import { Message } from '@/lib/toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
+
+// Kept minimal; login page only exposes locale toggle (no theme / user menu)
+// because the page is reached pre-auth. The toggle mirrors the header button
+// in AppLayout so returning users see a familiar control.
+function toggleLocale() {
+  setLocale(locale.value === 'zh-CN' ? 'en-US' : 'zh-CN')
+}
 
 const username = ref('')
 const password = ref('')
@@ -55,6 +65,19 @@ async function submit(e?: Event) {
     <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
       <div class="absolute -top-40 -left-40 size-[600px] rounded-full bg-brand-500/20 blur-3xl"></div>
       <div class="absolute -bottom-40 -right-40 size-[600px] rounded-full bg-brand-300/20 blur-3xl"></div>
+    </div>
+
+    <div class="absolute top-3 right-3 z-10">
+      <Tooltip>
+        <TooltipTrigger as-child>
+          <Button variant="ghost" size="icon" aria-label="locale" @click="toggleLocale">
+            <Languages />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {{ locale === 'zh-CN' ? 'Switch to English' : '切换到中文' }}
+        </TooltipContent>
+      </Tooltip>
     </div>
 
     <div

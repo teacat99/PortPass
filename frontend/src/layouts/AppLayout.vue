@@ -7,7 +7,7 @@ import {
   List,
   History,
   Settings,
-  Globe,
+  Languages,
   LogOut,
   User as UserIcon,
   Lock,
@@ -206,7 +206,7 @@ async function submitPassword() {
         <Tooltip>
           <TooltipTrigger as-child>
             <Button variant="ghost" size="icon" aria-label="locale" @click="toggleLocale">
-              <Globe />
+              <Languages />
             </Button>
           </TooltipTrigger>
           <TooltipContent>
