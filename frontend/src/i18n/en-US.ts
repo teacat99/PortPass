@@ -57,21 +57,65 @@ export default {
     lastAdminWarn: 'At least one active admin must remain'
   },
   home: {
-    clientIP: 'Current client IP',
+    helloMorning: 'Good morning',
+    helloAfternoon: 'Good afternoon',
+    helloEvening: 'Good evening',
+    helloNight: 'Working late',
+    welcomeSub: 'Open a server port for a specific IP — auto-closes when the timer is up.',
+    clientIP: 'Your current IP',
+    clientIPSub: 'Defaults to this IP — automatically added to the allow-list',
+    createTitle: 'New temporary port rule',
+    createSub: 'Three steps. Auto-closes — you can\'t forget.',
+
+    stepWho: '① Who can connect?',
+    stepWhat: '② Which service?',
+    stepHowLong: '③ How long?',
+
     sourceMode: 'Source IP',
-    sourceCurrent: 'Use current IP',
-    sourceAny: 'Any IP (0.0.0.0/0)',
-    sourceManual: 'Manual CIDR',
+    sourceCurrent: 'Just me (current IP)',
+    sourceAny: 'Anyone on the internet',
+    sourceManual: 'Specific IP / CIDR',
+    sourceManualPlaceholder: 'e.g. 192.168.1.0/24',
+    sourcePreviewLabel: 'Will allow',
+
     port: 'Port',
     portPlaceholder: '1-65535',
-    presets: 'Presets',
+    portInvalid: 'Port must be 1-65535',
+    customPort: 'Custom port',
+    presetsLabel: 'Quick presets',
+    presetsAdminLocked: 'Admin-only port',
+
     protocol: 'Protocol',
+    protoTcp: 'TCP',
+    protoUdp: 'UDP',
+    protoBoth: 'TCP + UDP',
+
     duration: 'Duration',
     durationCustom: 'Custom expiry',
+    durationPreviewPrefix: 'Auto-closes at',
+    durationPreviewSuffix: '',
+    durationMaxHint: 'This port is capped at {n} minutes',
+
     note: 'Note',
-    notePlaceholder: 'Optional memo',
-    submitted: 'Rule applied',
-    countdown: 'Remaining'
+    notePlaceholder: 'Optional — e.g. "team SSH debug"',
+
+    submit: 'Open it now',
+    submitting: 'Pushing to firewall...',
+
+    submittedTitle: 'Rule is live',
+    submittedSub: 'Will close itself when the timer runs out — no cleanup needed.',
+    submittedAgain: 'Open another',
+    submittedView: 'View rules',
+    submittedSshHint: 'Copy SSH command',
+    submittedSshHintCopied: 'Copied to clipboard',
+    countdown: 'Time left',
+
+    catRemote: 'Remote login',
+    catWeb: 'Web servers',
+    catDb: 'Databases',
+    catMq: 'Message queues',
+    catGame: 'Game servers',
+    catMisc: 'Other ports'
   },
   rules: {
     title: 'Active rules',

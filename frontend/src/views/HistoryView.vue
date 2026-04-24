@@ -2,9 +2,13 @@
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
+import { IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
 import { listHistory } from '@/api/rules'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { Rule } from '@/api/types'
+import EmptyState from '@/components/EmptyState.vue'
+import StatusTag from '@/components/StatusTag.vue'
+import CopyableText from '@/components/CopyableText.vue'
 
 const { t } = useI18n()
 const { isMobile } = useBreakpoint()
@@ -43,104 +47,253 @@ function durationOf(r: Rule): string {
   const end = r.terminated_at ? new Date(r.terminated_at).getTime() : new Date(r.expire_at).getTime()
   const start = new Date(r.created_at).getTime()
   const s = Math.max(0, Math.floor((end - start) / 1000))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  return h > 0 ? `${h}h${m}m` : `${m}m`
+  if (s < 60) return s + 's'
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + 'm'
+  const h = Math.floor(m / 60)
+  return h + 'h' + (m % 60) + 'm'
 }
 
-function statusColor(s: string) {
-  return s === 'failed' ? 'red' : s === 'revoked' ? 'orange' : 'gray'
+function reset() {
+  filter.value = { port: undefined, ip: '', status: '', range: [] }
+  reload()
 }
 
 onMounted(reload)
 </script>
 
 <template>
-  <a-card :title="t('history.title')">
-    <template #extra>
-      <a-button type="primary" @click="reload">{{ t('action.refresh') }}</a-button>
-    </template>
-
-    <!-- Filter bar: inline on desktop, stacked on mobile (see responsive.css
-         for the .portpass-filter-bar rule). -->
-    <div class="portpass-filter-bar filter-bar">
-      <a-input-number
-        v-model="filter.port"
-        :min="1"
-        :max="65535"
-        :placeholder="t('rules.port')"
-        allow-clear
-        style="width: 140px"
-      />
-      <a-input v-model="filter.ip" placeholder="IP" allow-clear style="width: 180px" />
-      <a-select v-model="filter.status" :placeholder="t('history.status')" allow-clear style="width: 160px">
-        <a-option value="expired">{{ t('status.expired') }}</a-option>
-        <a-option value="revoked">{{ t('status.revoked') }}</a-option>
-        <a-option value="failed">{{ t('status.failed') }}</a-option>
-      </a-select>
-      <a-range-picker v-model="filter.range" show-time style="min-width: 280px; flex: 1 1 280px" />
-      <a-button type="primary" @click="reload">{{ t('action.search') }}</a-button>
-    </div>
-
-    <a-table
-      v-if="!isMobile"
-      :loading="loading"
-      :data="rules"
-      :scroll="{ x: 880 }"
-      :pagination="{ pageSize: 20, total }"
-    >
-      <template #columns>
-        <a-table-column title="ID" data-index="id" :width="70" />
-        <a-table-column :title="t('history.status')" data-index="status" :width="100">
-          <template #cell="{ record }">
-            <a-tag :color="statusColor(record.status)">{{ t(`status.${record.status}`) }}</a-tag>
-          </template>
-        </a-table-column>
-        <a-table-column :title="t('rules.source')" data-index="source_ip" />
-        <a-table-column :title="t('rules.port')">
-          <template #cell="{ record }">{{ record.port }}/{{ record.protocol }}</template>
-        </a-table-column>
-        <a-table-column :title="t('history.actor')" data-index="created_ip" />
-        <a-table-column title="User" data-index="created_by" :width="120" />
-        <a-table-column :title="t('rules.createdAt')">
-          <template #cell="{ record }">{{ dayjs(record.created_at).format('MM-DD HH:mm') }}</template>
-        </a-table-column>
-        <a-table-column :title="t('history.terminatedAt')">
-          <template #cell="{ record }">{{ record.terminated_at ? dayjs(record.terminated_at).format('MM-DD HH:mm') : '—' }}</template>
-        </a-table-column>
-        <a-table-column :title="t('history.duration')" :width="100">
-          <template #cell="{ record }">{{ durationOf(record) }}</template>
-        </a-table-column>
-        <a-table-column :title="t('rules.note')" data-index="note" ellipsis tooltip />
-      </template>
-    </a-table>
-
-    <div v-else class="portpass-card-list">
-      <a-empty v-if="!rules.length && !loading" />
-      <div v-for="r in rules" :key="r.id" class="portpass-card">
-        <h4>
-          #{{ r.id }}
-          <a-tag :color="statusColor(r.status)" size="small">{{ t(`status.${r.status}`) }}</a-tag>
-        </h4>
-        <div class="row"><span class="label">{{ t('rules.port') }}</span><span class="mono">{{ r.port }}/{{ r.protocol }}</span></div>
-        <div class="row"><span class="label">{{ t('rules.source') }}</span><span class="mono">{{ r.source_ip }}</span></div>
-        <div class="row"><span class="label">{{ t('history.actor') }}</span><span class="mono">{{ r.created_ip }}</span></div>
-        <div class="row"><span class="label">User</span><span>{{ r.created_by || '-' }}</span></div>
-        <div class="row"><span class="label">{{ t('rules.createdAt') }}</span><span>{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span></div>
-        <div class="row"><span class="label">{{ t('history.duration') }}</span><span>{{ durationOf(r) }}</span></div>
-        <div v-if="r.note" class="row"><span class="label">{{ t('rules.note') }}</span><span>{{ r.note }}</span></div>
+  <div class="pp-page history-wrap">
+    <header class="pp-card-head">
+      <div>
+        <h1 class="pp-page-title">{{ t('history.title') }}</h1>
+        <p class="pp-page-sub">查看过去的全部规则操作（含到期、撤销、失败）</p>
       </div>
-    </div>
-  </a-card>
+      <div class="pp-head-actions">
+        <a-button @click="reload" :loading="loading">
+          <template #icon><IconRefresh /></template>
+          {{ t('action.refresh') }}
+        </a-button>
+      </div>
+    </header>
+
+    <a-card class="filter-card">
+      <div class="filter-bar">
+        <a-input-number
+          v-model="filter.port"
+          :min="1"
+          :max="65535"
+          :placeholder="t('rules.port')"
+          allow-clear
+          hide-button
+          class="f-port"
+        />
+        <a-input v-model="filter.ip" placeholder="IP / CIDR" allow-clear class="f-ip" />
+        <a-select v-model="filter.status" :placeholder="t('history.status')" allow-clear class="f-status">
+          <a-option value="expired">{{ t('status.expired') }}</a-option>
+          <a-option value="revoked">{{ t('status.revoked') }}</a-option>
+          <a-option value="failed">{{ t('status.failed') }}</a-option>
+        </a-select>
+        <a-range-picker v-model="filter.range" show-time class="f-range" />
+        <div class="f-actions">
+          <a-button @click="reset">重置</a-button>
+          <a-button type="primary" @click="reload">
+            <template #icon><IconSearch /></template>
+            {{ t('action.search') }}
+          </a-button>
+        </div>
+      </div>
+    </a-card>
+
+    <a-card class="list-card">
+      <div v-if="loading && !rules.length" class="loading-skel">
+        <a-skeleton :animation="true" v-for="i in 4" :key="i">
+          <a-skeleton-line :rows="2" :widths="['50%', '90%']" />
+        </a-skeleton>
+      </div>
+
+      <EmptyState
+        v-else-if="!rules.length"
+        icon="📜"
+        title="暂无符合条件的历史"
+        description="尝试调整时间范围或清空筛选条件，重新搜索。"
+      >
+        <template #action>
+          <a-button @click="reset">清空筛选</a-button>
+        </template>
+      </EmptyState>
+
+      <a-table
+        v-else-if="!isMobile"
+        :data="rules"
+        :scroll="{ x: 1000 }"
+        :pagination="{ pageSize: 20, total, showTotal: true }"
+        :hoverable="true"
+        :bordered="false"
+        size="medium"
+        row-key="id"
+      >
+        <template #columns>
+          <a-table-column title="ID" :width="80">
+            <template #cell="{ record }">
+              <CopyableText :value="record.id" mono />
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('history.status')" :width="100">
+            <template #cell="{ record }">
+              <StatusTag :status="record.status" />
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('rules.source')" :width="170">
+            <template #cell="{ record }">
+              <CopyableText :value="record.source_ip" mono />
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('rules.port')" :width="120">
+            <template #cell="{ record }">
+              <span class="port-cell">
+                <code>:{{ record.port }}</code>
+                <a-tag size="small" :color="record.protocol === 'udp' ? 'purple' : 'arcoblue'">{{ record.protocol.toUpperCase() }}</a-tag>
+              </span>
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('history.actor')" :width="160">
+            <template #cell="{ record }">
+              <CopyableText :value="record.created_ip" mono />
+            </template>
+          </a-table-column>
+          <a-table-column title="用户" :width="110">
+            <template #cell="{ record }">
+              <a-tag size="small" color="gray">{{ record.created_by || '-' }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('rules.createdAt')" :width="140">
+            <template #cell="{ record }">
+              <a-tooltip :content="dayjs(record.created_at).format('YYYY-MM-DD HH:mm:ss')">
+                <span class="muted">{{ dayjs(record.created_at).format('MM-DD HH:mm') }}</span>
+              </a-tooltip>
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('history.terminatedAt')" :width="140">
+            <template #cell="{ record }">
+              <span v-if="record.terminated_at" class="muted">{{ dayjs(record.terminated_at).format('MM-DD HH:mm') }}</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </a-table-column>
+          <a-table-column :title="t('history.duration')" :width="90">
+            <template #cell="{ record }"><span class="mono">{{ durationOf(record) }}</span></template>
+          </a-table-column>
+          <a-table-column :title="t('rules.note')" data-index="note" ellipsis tooltip />
+        </template>
+      </a-table>
+
+      <div v-else class="m-list">
+        <div v-for="r in rules" :key="r.id" class="m-card">
+          <div class="m-card-head">
+            <span class="m-port">
+              <code>:{{ r.port }}</code>
+              <a-tag size="small" :color="r.protocol === 'udp' ? 'purple' : 'arcoblue'">{{ r.protocol.toUpperCase() }}</a-tag>
+            </span>
+            <StatusTag :status="r.status" />
+          </div>
+          <div class="m-grid">
+            <div class="m-cell"><span class="muted">{{ t('rules.source') }}</span>
+              <CopyableText :value="r.source_ip" mono />
+            </div>
+            <div class="m-cell"><span class="muted">{{ t('history.actor') }}</span>
+              <CopyableText :value="r.created_ip" mono />
+            </div>
+            <div class="m-cell"><span class="muted">{{ t('rules.createdAt') }}</span>
+              <span class="mono">{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span>
+            </div>
+            <div class="m-cell"><span class="muted">{{ t('history.duration') }}</span>
+              <span class="mono">{{ durationOf(r) }}</span>
+            </div>
+            <div class="m-cell"><span class="muted">用户</span>
+              <span>{{ r.created_by || '-' }}</span>
+            </div>
+            <div class="m-cell"><span class="muted">ID</span>
+              <CopyableText :value="r.id" mono />
+            </div>
+          </div>
+          <div v-if="r.note" class="m-note">📝 {{ r.note }}</div>
+        </div>
+      </div>
+    </a-card>
+  </div>
 </template>
 
 <style scoped>
-.filter-bar {
+.history-wrap { display: flex; flex-direction: column; gap: 16px; }
+.pp-card-head {
   display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
 }
-.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+.pp-page-title { margin: 0; font-size: 20px; font-weight: 600; color: var(--color-text-1); }
+.pp-page-sub { margin: 4px 0 0; color: var(--color-text-3); font-size: 13px; }
+.pp-head-actions { display: flex; gap: 8px; }
+
+.filter-card { border-radius: 14px; }
+.filter-bar {
+  display: grid;
+  grid-template-columns: 120px 180px 160px 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.f-port { width: 100%; }
+.f-ip, .f-status { width: 100%; }
+.f-range { width: 100%; min-width: 240px; }
+.f-actions { display: flex; gap: 8px; }
+
+.list-card { border-radius: 14px; }
+.list-card :deep(.arco-card-body) { padding: 0; }
+.list-card :deep(.arco-table-th) { background: var(--pp-surface-soft); font-weight: 600; }
+.loading-skel { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+
+.port-cell { display: inline-flex; align-items: center; gap: 6px; }
+.port-cell code { font-family: ui-monospace, monospace; font-weight: 600; color: var(--color-text-1); }
+.muted { color: var(--color-text-3); font-size: 12px; }
+.mono { font-family: ui-monospace, monospace; }
+
+.m-list { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.m-card {
+  background: var(--pp-surface);
+  border: 1px solid var(--pp-border);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.m-port { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.m-port code { font-family: ui-monospace, monospace; font-size: 15px; }
+.m-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  font-size: 13px;
+}
+.m-cell { display: flex; flex-direction: column; gap: 2px; }
+.m-cell .muted { font-size: 11px; }
+.m-note {
+  background: var(--pp-surface-sunken);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-text-2);
+}
+
+@media (max-width: 768px) {
+  .filter-bar { grid-template-columns: 1fr 1fr; }
+  .f-range { grid-column: 1 / -1; }
+  .f-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}
 </style>

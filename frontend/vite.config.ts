@@ -65,7 +65,18 @@ export default defineConfig({
     outDir: path.resolve(__dirname, '../web/dist'),
     emptyOutDir: true,
     sourcemap: false,
-    chunkSizeWarningLimit: 800
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        // Split heavy vendor chunks so the home-page TTI is not gated on
+        // libraries only used by the settings / users pages.
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-router', 'pinia', 'vue-i18n'],
+          'vendor-arco': ['@arco-design/web-vue'],
+          'vendor-misc': ['axios', 'dayjs']
+        }
+      }
+    }
   },
   server: {
     host: '0.0.0.0',

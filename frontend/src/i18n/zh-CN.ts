@@ -57,21 +57,65 @@ export default {
     lastAdminWarn: '至少需要保留一位启用中的管理员'
   },
   home: {
-    clientIP: '当前客户端 IP',
+    helloMorning: '早上好',
+    helloAfternoon: '下午好',
+    helloEvening: '晚上好',
+    helloNight: '夜深了',
+    welcomeSub: '从这里临时为指定 IP 打开服务器端口，到期自动关闭',
+    clientIP: '你当前的 IP',
+    clientIPSub: '默认就是这个 IP，会被自动加进白名单',
+    createTitle: '创建一条临时端口规则',
+    createSub: '三步搞定，到期自动关闭，不会忘',
+
+    stepWho: '① 谁可以访问？',
+    stepWhat: '② 开放哪个服务？',
+    stepHowLong: '③ 多久后自动关闭？',
+
     sourceMode: '来源 IP',
-    sourceCurrent: '使用当前 IP',
-    sourceAny: '全部 IP (0.0.0.0/0)',
-    sourceManual: '手动输入 CIDR',
+    sourceCurrent: '只允许我（当前 IP）',
+    sourceAny: '所有人都能访问',
+    sourceManual: '指定 IP / CIDR',
+    sourceManualPlaceholder: '例如 192.168.1.0/24',
+    sourcePreviewLabel: '将放行',
+
     port: '端口',
     portPlaceholder: '1-65535',
-    presets: '预设',
+    portInvalid: '端口需在 1-65535 之间',
+    customPort: '自定义端口',
+    presetsLabel: '快捷预设',
+    presetsAdminLocked: '该端口仅管理员可开放',
+
     protocol: '协议',
+    protoTcp: 'TCP',
+    protoUdp: 'UDP',
+    protoBoth: 'TCP + UDP',
+
     duration: '有效期',
     durationCustom: '自定义到期时刻',
+    durationPreviewPrefix: '将在',
+    durationPreviewSuffix: '自动关闭',
+    durationMaxHint: '该端口最长可开 {n} 分钟',
+
     note: '备注',
-    notePlaceholder: '可选，用于识别该规则',
-    submitted: '规则已下发',
-    countdown: '剩余时间'
+    notePlaceholder: '可选 — 例如 "团队成员 SSH 调试"',
+
+    submit: '立即开放',
+    submitting: '正在下发到防火墙...',
+
+    submittedTitle: '规则已生效',
+    submittedSub: '到期会自动关闭，无需手动清理',
+    submittedAgain: '再开一条',
+    submittedView: '去看规则',
+    submittedSshHint: '复制 SSH 命令',
+    submittedSshHintCopied: '命令已复制到剪贴板',
+    countdown: '倒计时',
+
+    catRemote: '远程登录',
+    catWeb: 'Web 服务',
+    catDb: '数据库',
+    catMq: '消息队列',
+    catGame: '游戏服务',
+    catMisc: '其他端口'
   },
   rules: {
     title: '活跃规则',

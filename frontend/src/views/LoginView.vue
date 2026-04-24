@@ -40,7 +40,7 @@ async function submit() {
   <div class="login-wrap">
     <a-card class="login-card">
       <div class="brand">
-        <div class="mark">P</div>
+        <img src="@/assets/logo.svg" class="mark" alt="PortPass" />
         <div>
           <div class="title">{{ t('login.title') }}</div>
           <div class="sub">{{ t('app.subtitle') }}</div>
@@ -83,25 +83,41 @@ async function submit() {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: linear-gradient(135deg, #eaf2ff 0%, #f5f7fa 100%);
+  background:
+    radial-gradient(800px 500px at 0% 0%, rgba(64, 128, 255, 0.18), transparent 60%),
+    radial-gradient(700px 500px at 100% 100%, rgba(108, 177, 255, 0.18), transparent 60%),
+    var(--pp-surface-soft);
+  position: relative;
+}
+.login-wrap::before {
+  /* Decorative grid backdrop. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(22, 93, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(22, 93, 255, 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%);
 }
 .login-card {
   width: 100%;
-  max-width: min(92vw, 380px);
+  max-width: min(92vw, 400px);
+  border-radius: 16px;
+  box-shadow: var(--pp-shadow-3);
+  position: relative;
+  z-index: 1;
 }
-.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-.mark {
-  width: 42px; height: 42px; border-radius: 10px;
-  background: linear-gradient(135deg, #165dff, #3e8cff);
-  color: #fff; display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 20px;
-}
-.title { font-weight: 600; font-size: 18px; }
-.sub { color: var(--color-text-3); font-size: 12px; }
+.login-card :deep(.arco-card-body) { padding: 28px 28px 20px; }
+.brand { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+.mark { width: 44px; height: 44px; border-radius: 12px; }
+.title { font-weight: 600; font-size: 19px; color: var(--color-text-1); }
+.sub { color: var(--color-text-3); font-size: 12px; margin-top: 2px; }
 
 @media (max-width: 640px) {
-  .login-wrap { padding: 12px; align-items: flex-start; padding-top: 48px; }
-  .login-card { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04); }
+  .login-wrap { padding: 12px; align-items: flex-start; padding-top: 56px; }
+  .login-card :deep(.arco-card-body) { padding: 22px 20px 14px; }
   .title { font-size: 17px; }
 }
 </style>
