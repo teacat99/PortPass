@@ -10,17 +10,14 @@ const routes: RouteRecordRaw[] = [
       { path: 'rules', name: 'rules', component: () => import('@/views/RulesView.vue') },
       { path: 'history', name: 'history', component: () => import('@/views/HistoryView.vue') },
       {
-        path: 'users',
-        name: 'users',
-        meta: { adminOnly: true },
-        component: () => import('@/views/UsersView.vue')
-      },
-      {
         path: 'settings',
         name: 'settings',
         meta: { adminOnly: true },
         component: () => import('@/views/SettingsView.vue')
-      }
+      },
+      // Legacy `/users` URL kept as a redirect so bookmarks keep working
+      // after the Users page became a tab inside Settings.
+      { path: 'users', redirect: { name: 'settings' } }
     ]
   },
   { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') }

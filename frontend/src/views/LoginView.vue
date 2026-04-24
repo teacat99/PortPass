@@ -2,8 +2,11 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Message } from '@arco-design/web-vue'
 import { useAuthStore } from '@/stores/auth'
+import { Message } from '@/lib/toast'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -11,8 +14,8 @@ const router = useRouter()
 const route = useRoute()
 
 // Pre-fill username with the conventional default so fresh installs can be
-// signed into on a single tap. Real deployments will override this after
-// rotating the seed password anyway.
+// signed into on a single tap. Real deployments override after rotating
+// the seed password anyway.
 const username = ref('admin')
 const password = ref('')
 const loading = ref(false)
@@ -21,7 +24,8 @@ onMounted(async () => {
   await auth.refreshStatus()
 })
 
-async function submit() {
+async function submit(e?: Event) {
+  e?.preventDefault()
   if (!username.value.trim() || !password.value) return
   loading.value = true
   try {
@@ -37,87 +41,61 @@ async function submit() {
 </script>
 
 <template>
-  <div class="login-wrap">
-    <a-card class="login-card">
-      <div class="brand">
-        <img src="@/assets/logo.svg" class="mark" alt="PortPass" />
-        <div>
-          <div class="title">{{ t('login.title') }}</div>
-          <div class="sub">{{ t('app.subtitle') }}</div>
+  <div class="min-h-screen flex items-center justify-center p-5 relative overflow-hidden bg-background">
+    <!-- Ambient brand gradient. Kept as an absolutely-positioned layer so
+         the form card sits on a neutral surface while still picking up the
+         brand identity. -->
+    <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+      <div class="absolute -top-40 -left-40 size-[600px] rounded-full bg-brand-500/20 blur-3xl"></div>
+      <div class="absolute -bottom-40 -right-40 size-[600px] rounded-full bg-brand-300/20 blur-3xl"></div>
+    </div>
+
+    <div
+      class="relative w-full max-w-sm rounded-lg border border-border bg-card shadow-modal p-7"
+    >
+      <div class="flex items-center gap-3 mb-6">
+        <img src="@/assets/logo.svg" alt="PortPass" class="size-11 rounded-xl" />
+        <div class="flex flex-col">
+          <span class="font-semibold text-lg">{{ t('login.title') }}</span>
+          <span class="text-xs text-muted-foreground mt-0.5">{{ t('app.subtitle') }}</span>
         </div>
       </div>
-      <a-form :model="{ username, password }" layout="vertical" @submit="submit">
-        <a-form-item :label="t('login.username')">
-          <a-input
+
+      <form class="flex flex-col gap-4" @submit="submit">
+        <div class="flex flex-col gap-1.5">
+          <Label for="login-username">{{ t('login.username') }}</Label>
+          <Input
+            id="login-username"
             v-model="username"
-            size="large"
             :placeholder="t('login.usernamePlaceholder')"
             autocomplete="username"
-            allow-clear
+            class="h-11 text-base"
           />
-        </a-form-item>
-        <a-form-item :label="t('login.password')">
-          <a-input-password
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="login-password">{{ t('login.password') }}</Label>
+          <Input
+            id="login-password"
             v-model="password"
-            size="large"
+            type="password"
             :placeholder="t('login.passwordPlaceholder')"
             autocomplete="current-password"
-            @press-enter="submit"
-            allow-clear
+            class="h-11 text-base"
+            @keydown.enter="submit"
           />
-        </a-form-item>
-        <a-form-item>
-          <a-button long size="large" type="primary" :loading="loading" @click="submit">
-            {{ t('action.login') }}
-          </a-button>
-        </a-form-item>
-      </a-form>
-    </a-card>
+        </div>
+
+        <Button
+          type="submit"
+          size="lg"
+          class="w-full mt-2"
+          :disabled="loading || !username.trim() || !password"
+        >
+          <span v-if="loading" class="inline-block size-4 rounded-full border-2 border-primary-foreground/50 border-t-transparent animate-spin" />
+          <span>{{ t('action.login') }}</span>
+        </Button>
+      </form>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.login-wrap {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background:
-    radial-gradient(800px 500px at 0% 0%, rgba(64, 128, 255, 0.18), transparent 60%),
-    radial-gradient(700px 500px at 100% 100%, rgba(108, 177, 255, 0.18), transparent 60%),
-    var(--pp-surface-soft);
-  position: relative;
-}
-.login-wrap::before {
-  /* Decorative grid backdrop. */
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(22, 93, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(22, 93, 255, 0.04) 1px, transparent 1px);
-  background-size: 32px 32px;
-  pointer-events: none;
-  mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%);
-}
-.login-card {
-  width: 100%;
-  max-width: min(92vw, 400px);
-  border-radius: 16px;
-  box-shadow: var(--pp-shadow-3);
-  position: relative;
-  z-index: 1;
-}
-.login-card :deep(.arco-card-body) { padding: 28px 28px 20px; }
-.brand { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
-.mark { width: 44px; height: 44px; border-radius: 12px; }
-.title { font-weight: 600; font-size: 19px; color: var(--color-text-1); }
-.sub { color: var(--color-text-3); font-size: 12px; margin-top: 2px; }
-
-@media (max-width: 640px) {
-  .login-wrap { padding: 12px; align-items: flex-start; padding-top: 56px; }
-  .login-card :deep(.arco-card-body) { padding: 22px 20px 14px; }
-  .title { font-size: 17px; }
-}
-</style>

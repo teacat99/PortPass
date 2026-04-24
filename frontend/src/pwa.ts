@@ -1,24 +1,23 @@
 import { registerSW } from 'virtual:pwa-register'
-import { Notification } from '@arco-design/web-vue'
+import { toast } from 'vue-sonner'
 
-// registerPWA wires Service Worker update events to Arco notifications. We
-// use manual dismiss so the user isn't interrupted mid-task; they can click
-// "Refresh" on their own time.
+// registerPWA wires Service Worker update events to sonner toasts. Update
+// prompts use a manual-dismiss toast with an action button so the user
+// can choose when to reload, avoiding interrupting in-flight edits.
 export function registerPWA() {
   const updateSW = registerSW({
     onNeedRefresh() {
-      Notification.info({
-        id: 'portpass-sw-update',
-        title: 'Update available',
-        content: 'A new version is ready. Reload to apply.',
-        closable: true,
-        duration: 0,
-        btnText: 'Reload',
-        onClick: () => updateSW(true)
-      } as any)
+      toast.info('New version available', {
+        description: 'Reload to pick up the latest changes.',
+        duration: Infinity,
+        action: {
+          label: 'Reload',
+          onClick: () => updateSW(true)
+        }
+      })
     },
     onOfflineReady() {
-      Notification.success({ title: 'PortPass', content: 'Ready to work offline', duration: 2000 })
+      toast.success('PortPass is ready to work offline', { duration: 2000 })
     }
   })
 }

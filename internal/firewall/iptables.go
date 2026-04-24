@@ -140,7 +140,9 @@ func (d *IPTables) verify(bin string, rule *model.Rule, tag string) (bool, error
 
 // buildArgs produces the argv for the three operations (-I/-D/-C) that all
 // share an identical predicate. Keeping them in one place ensures an insert
-// can always be matched by a delete.
+// can always be matched by a delete. When the rule covers more than a
+// single port, we switch to `-m multiport --dports` so everything is
+// expressed in one iptables line.
 func buildArgs(op string, rule *model.Rule, proto, tag string) []string {
 	args := []string{op, "INPUT"}
 	if op == "-I" {
@@ -150,7 +152,14 @@ func buildArgs(op string, rule *model.Rule, proto, tag string) []string {
 	if src := canonicalSource(rule.SourceIP); src != "" {
 		args = append(args, "-s", src)
 	}
-	args = append(args, "--dport", strconv.Itoa(rule.Port))
+	ps := rulePorts(rule)
+	if ps.EntryCount() > 1 || (ps.EntryCount() == 1 && ps.Ranges[0].From != ps.Ranges[0].To) {
+		args = append(args, "-m", "multiport", "--dports", ps.IPTablesFormat())
+	} else if ps.EntryCount() == 1 {
+		args = append(args, "--dport", strconv.Itoa(ps.Ranges[0].From))
+	} else {
+		args = append(args, "--dport", strconv.Itoa(rule.Port))
+	}
 	args = append(args, "-m", "comment", "--comment", tag)
 	args = append(args, "-j", "ACCEPT")
 	return args
@@ -231,6 +240,19 @@ func parseSaveLine(line string) (Applied, bool) {
 		case "--dport":
 			if i+1 < len(tokens) {
 				if p, err := strconv.Atoi(tokens[i+1]); err == nil {
+					a.Port = p
+				}
+				i++
+			}
+		case "--dports":
+			// multiport "--dports 80,443,8080:8090" - remember the
+			// first port so reconciliation can still render a sensible
+			// label, but we don't otherwise act on it (matching is by
+			// rule-id comment tag).
+			if i+1 < len(tokens) {
+				first := strings.SplitN(tokens[i+1], ",", 2)[0]
+				first = strings.SplitN(first, ":", 2)[0]
+				if p, err := strconv.Atoi(first); err == nil {
 					a.Port = p
 				}
 				i++

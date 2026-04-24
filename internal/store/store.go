@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -12,6 +13,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/teacat99/PortPass/internal/model"
+	"github.com/teacat99/PortPass/internal/portset"
 )
 
 // DefaultAdminUsername is the seed admin account username used when the
@@ -46,13 +48,53 @@ func New(path string) (*Store, error) {
 	if err := db.AutoMigrate(
 		&model.Rule{},
 		&model.PresetPort{},
+		&model.ProtectedPort{},
+		&model.UserAllowedRange{},
 		&model.Setting{},
 		&model.AuditLog{},
 		&model.User{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.backfillPortGroups(); err != nil {
+		return nil, fmt.Errorf("backfill ports: %w", err)
+	}
+	return s, nil
+}
+
+// backfillPortGroups is a one-shot migration that copies the legacy
+// single-port column into the new `ports` canonical string column.
+// Rows that already have a non-empty `ports` value are left alone so
+// the migration is idempotent across restarts.
+func (s *Store) backfillPortGroups() error {
+	var rules []model.Rule
+	if err := s.db.Where("ports = '' OR ports IS NULL").Find(&rules).Error; err != nil {
+		return err
+	}
+	for i := range rules {
+		r := &rules[i]
+		if r.Port > 0 {
+			r.Ports = strconv.Itoa(r.Port)
+			if err := s.db.Model(r).Update("ports", r.Ports).Error; err != nil {
+				return err
+			}
+		}
+	}
+	var presets []model.PresetPort
+	if err := s.db.Where("ports = '' OR ports IS NULL").Find(&presets).Error; err != nil {
+		return err
+	}
+	for i := range presets {
+		p := &presets[i]
+		if p.Port > 0 {
+			p.Ports = strconv.Itoa(p.Port)
+			if err := s.db.Model(p).Update("ports", p.Ports).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // SeedAdminIfEmpty ensures there is at least one administrator row in the
@@ -142,14 +184,14 @@ func (s *Store) SeedPresetPorts() error {
 		return nil
 	}
 	defaults := []model.PresetPort{
-		{Name: "SSH", Port: 22, Protocol: model.ProtoTCP, Sort: 1},
-		{Name: "RDP", Port: 3389, Protocol: model.ProtoTCP, Sort: 2},
-		{Name: "HTTP", Port: 80, Protocol: model.ProtoTCP, Sort: 3},
-		{Name: "HTTPS", Port: 443, Protocol: model.ProtoTCP, Sort: 4},
-		{Name: "MySQL", Port: 3306, Protocol: model.ProtoTCP, Sort: 5},
-		{Name: "PostgreSQL", Port: 5432, Protocol: model.ProtoTCP, Sort: 6},
-		{Name: "Redis", Port: 6379, Protocol: model.ProtoTCP, Sort: 7},
-		{Name: "MongoDB", Port: 27017, Protocol: model.ProtoTCP, Sort: 8},
+		{Name: "SSH", Port: 22, Ports: "22", Protocol: model.ProtoTCP, Sort: 1},
+		{Name: "RDP", Port: 3389, Ports: "3389", Protocol: model.ProtoTCP, Sort: 2},
+		{Name: "HTTP", Port: 80, Ports: "80", Protocol: model.ProtoTCP, Sort: 3},
+		{Name: "HTTPS", Port: 443, Ports: "443", Protocol: model.ProtoTCP, Sort: 4},
+		{Name: "MySQL", Port: 3306, Ports: "3306", Protocol: model.ProtoTCP, Sort: 5},
+		{Name: "PostgreSQL", Port: 5432, Ports: "5432", Protocol: model.ProtoTCP, Sort: 6},
+		{Name: "Redis", Port: 6379, Ports: "6379", Protocol: model.ProtoTCP, Sort: 7},
+		{Name: "MongoDB", Port: 27017, Ports: "27017", Protocol: model.ProtoTCP, Sort: 8},
 	}
 	return s.db.Create(&defaults).Error
 }
@@ -288,22 +330,42 @@ func (s *Store) ListUserAllowedPresets() ([]model.PresetPort, error) {
 	return out, err
 }
 
-// FindPresetForUser finds a user-allowed preset that matches (port, proto).
-// A preset with Protocol=both satisfies either tcp or udp requests; a
-// requested proto of "both" may only match a both-preset. Returns nil when
-// no matching preset exists (meaning the port is not user-allowed).
-func (s *Store) FindPresetForUser(port int, proto string) (*model.PresetPort, error) {
-	var ps []model.PresetPort
-	if err := s.db.Where("port = ? AND user_allowed = ?", port, true).Find(&ps).Error; err != nil {
+// FindPresetsForPortSet returns every user-allowed preset whose port
+// group is a superset of the requested set under a compatible protocol.
+// The policy layer then picks the one with the lowest MaxDurationSec
+// (most restrictive) to bound the request. Returning a slice lets the
+// caller pick whichever tie-breaker suits its purpose; an empty slice
+// means the request is not user-allowed.
+func (s *Store) FindPresetsForPortSet(want portset.Set, proto string) ([]model.PresetPort, error) {
+	all, err := s.ListUserAllowedPresets()
+	if err != nil {
 		return nil, err
 	}
-	for i := range ps {
-		p := &ps[i]
-		if p.Protocol == proto || p.Protocol == model.ProtoBoth {
-			return p, nil
+	var matches []model.PresetPort
+	for _, p := range all {
+		if !protoCompatible(p.Protocol, proto) {
+			continue
+		}
+		ps, err := portset.Parse(p.Ports)
+		if err != nil || ps.Empty() {
+			continue
+		}
+		if ps.ContainsSet(want) {
+			matches = append(matches, p)
 		}
 	}
-	return nil, nil
+	return matches, nil
+}
+
+// protoCompatible reports whether a rule with requested protocol `req`
+// is satisfied by a slot whose protocol is `slot`. A slot="both" always
+// matches; a request "both" must have a matching "both" slot; same
+// protocol matches itself.
+func protoCompatible(slot, req string) bool {
+	if slot == model.ProtoBoth {
+		return true
+	}
+	return slot == req
 }
 
 // UpsertPresetPort creates or updates a preset.
@@ -459,4 +521,116 @@ func (s *Store) PurgeHistory(retentionDays int) error {
 	}
 	cutoff := time.Now().AddDate(0, 0, -retentionDays)
 	return s.db.Where("created_at < ?", cutoff).Delete(&model.AuditLog{}).Error
+}
+
+// ------------------------- protected ports -------------------------
+
+// ListProtectedPorts returns every protected-port row.
+func (s *Store) ListProtectedPorts() ([]model.ProtectedPort, error) {
+	var out []model.ProtectedPort
+	err := s.db.Order("id ASC").Find(&out).Error
+	return out, err
+}
+
+// FindProtectedOverlap returns the first protected-port row whose port
+// group intersects with `want` under a compatible protocol. Returns
+// (nil, nil) when nothing overlaps.
+func (s *Store) FindProtectedOverlap(want portset.Set, proto string) (*model.ProtectedPort, error) {
+	rows, err := s.ListProtectedPorts()
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		p := &rows[i]
+		if !protoCompatible(p.Protocol, proto) && !protoCompatible(proto, p.Protocol) {
+			continue
+		}
+		ps, err := portset.Parse(p.Ports)
+		if err != nil || ps.Empty() {
+			continue
+		}
+		if ps.Overlaps(want) {
+			return p, nil
+		}
+	}
+	return nil, nil
+}
+
+// UpsertProtectedPort creates or updates a protected-port row.
+func (s *Store) UpsertProtectedPort(p *model.ProtectedPort) error {
+	return s.db.Save(p).Error
+}
+
+// DeleteProtectedPort removes a protected-port row.
+func (s *Store) DeleteProtectedPort(id uint) error {
+	return s.db.Delete(&model.ProtectedPort{}, id).Error
+}
+
+// ------------------------- user allowed ranges -------------------------
+
+// ListUserAllowedRanges returns the per-user override list.
+func (s *Store) ListUserAllowedRanges(userID uint) ([]model.UserAllowedRange, error) {
+	var out []model.UserAllowedRange
+	err := s.db.Where("user_id = ?", userID).Order("id ASC").Find(&out).Error
+	return out, err
+}
+
+// HasPersonalRanges reports whether a user has at least one allowed-range
+// row; the policy layer uses this to switch from preset.user_allowed
+// fallback to per-user override mode.
+func (s *Store) HasPersonalRanges(userID uint) (bool, error) {
+	var n int64
+	err := s.db.Model(&model.UserAllowedRange{}).Where("user_id = ?", userID).Count(&n).Error
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// CountPersonalRanges is the Store counterpart exposed to the API for
+// display-only purposes (e.g. the users table's policy column).
+func (s *Store) CountPersonalRanges(userID uint) (int64, error) {
+	var n int64
+	err := s.db.Model(&model.UserAllowedRange{}).Where("user_id = ?", userID).Count(&n).Error
+	return n, err
+}
+
+// FindUserAllowedForRequest returns the user's matching range (superset
+// of `want` under a compatible protocol). Returns (nil, nil) when
+// nothing covers the request.
+func (s *Store) FindUserAllowedForRequest(userID uint, want portset.Set, proto string) (*model.UserAllowedRange, error) {
+	rows, err := s.ListUserAllowedRanges(userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		r := &rows[i]
+		if !protoCompatible(r.Protocol, proto) {
+			continue
+		}
+		ps, err := portset.Parse(r.Ports)
+		if err != nil || ps.Empty() {
+			continue
+		}
+		if ps.ContainsSet(want) {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+// UpsertUserAllowedRange creates or updates a personal range row.
+func (s *Store) UpsertUserAllowedRange(r *model.UserAllowedRange) error {
+	return s.db.Save(r).Error
+}
+
+// DeleteUserAllowedRange removes a personal range row.
+func (s *Store) DeleteUserAllowedRange(id uint) error {
+	return s.db.Delete(&model.UserAllowedRange{}, id).Error
+}
+
+// ClearUserAllowedRanges removes every personal range row for a user.
+// The policy layer then reverts to preset.user_allowed fallback.
+func (s *Store) ClearUserAllowedRanges(userID uint) error {
+	return s.db.Where("user_id = ?", userID).Delete(&model.UserAllowedRange{}).Error
 }

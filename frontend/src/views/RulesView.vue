@@ -2,27 +2,41 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Message, Modal } from '@arco-design/web-vue'
 import dayjs from 'dayjs'
-import { IconRefresh, IconPlus, IconCloseCircle, IconClockCircle, IconCopy } from '@arco-design/web-vue/es/icon'
+import {
+  RefreshCw, Plus, XCircle, Clock, Copy, Search as SearchIcon
+} from 'lucide-vue-next'
 import { duplicateRule, extendRule, terminateRule } from '@/api/rules'
 import { useRulesStore } from '@/stores/rules'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { Rule } from '@/api/types'
+import { Message } from '@/lib/toast'
+
 import EmptyState from '@/components/EmptyState.vue'
 import CountdownChip from '@/components/CountdownChip.vue'
 import CopyableText from '@/components/CopyableText.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table, TableHeader, TableBody, TableRow, TableHead, TableCell
+} from '@/components/ui/table'
+import {
+  Tooltip, TooltipTrigger, TooltipContent
+} from '@/components/ui/tooltip'
+import {
+  Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle
+} from '@/components/ui/dialog'
 
 const { t } = useI18n()
 const router = useRouter()
 const store = useRulesStore()
-const { isMobile } = useBreakpoint()
 
 const extendVisible = ref(false)
 const extendTarget = ref<Rule | null>(null)
 const extendSec = ref<number>(60 * 60)
 
 const search = ref('')
+const confirmTarget = ref<Rule | null>(null)
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
@@ -38,25 +52,22 @@ const filtered = computed(() => {
   const q = search.value.trim().toLowerCase()
   if (!q) return store.active
   return store.active.filter((r) =>
-    String(r.port).includes(q)
+    String(r.ports || r.port).includes(q)
     || r.source_ip.toLowerCase().includes(q)
     || (r.note ?? '').toLowerCase().includes(q)
     || (r.created_by ?? '').toLowerCase().includes(q)
   )
 })
 
-async function onTerminate(rule: Rule) {
-  Modal.warning({
-    title: t('action.terminate'),
-    content: t('rules.terminateConfirm'),
-    hideCancel: false,
-    okButtonProps: { status: 'danger' },
-    onOk: async () => {
-      await terminateRule(rule.id)
-      Message.success(t('msg.ruleTerminated'))
-      await store.reload()
-    }
-  })
+function askTerminate(rule: Rule) { confirmTarget.value = rule }
+
+async function doTerminate() {
+  if (!confirmTarget.value) return
+  const id = confirmTarget.value.id
+  confirmTarget.value = null
+  await terminateRule(id)
+  Message.success(t('msg.ruleTerminated'))
+  await store.reload()
 }
 
 function openExtend(rule: Rule) {
@@ -78,47 +89,56 @@ async function onDuplicate(rule: Rule) {
   Message.success(t('msg.ruleDuplicated'))
   await store.reload()
 }
+
+function protoVariant(p: string) {
+  return p === 'udp' ? 'secondary' : 'default'
+}
 </script>
 
 <template>
-  <div class="pp-page rules-wrap">
-    <header class="pp-card-head">
+  <div class="pp-page flex flex-col gap-4">
+    <!-- Header -->
+    <header class="flex items-end justify-between gap-4 flex-wrap">
       <div>
-        <h1 class="pp-page-title">{{ t('rules.title') }}</h1>
-        <p class="pp-page-sub">
-          共 <strong>{{ store.active.length }}</strong> 条生效中
+        <h1 class="text-xl font-semibold text-foreground m-0">{{ t('rules.title') }}</h1>
+        <p class="text-sm text-muted-foreground mt-1 m-0">
+          共 <strong class="text-foreground">{{ store.active.length }}</strong> 条生效中
           <span v-if="search && filtered.length !== store.active.length">
             · 当前显示 {{ filtered.length }} 条
           </span>
         </p>
       </div>
-      <div class="pp-head-actions">
-        <a-input-search
-          v-model="search"
-          :placeholder="'按端口 / IP / 备注 / 用户名搜索'"
-          allow-clear
-          class="search-box"
-        />
-        <a-button @click="store.reload()" :loading="store.loading">
-          <template #icon><IconRefresh /></template>
-          {{ t('action.refresh') }}
-        </a-button>
-        <a-button type="primary" @click="router.push({ name: 'home' })">
-          <template #icon><IconPlus /></template>
-          {{ t('action.create') }}
-        </a-button>
+      <div class="flex gap-2 items-center flex-wrap w-full md:w-auto">
+        <div class="relative w-full md:w-60">
+          <SearchIcon class="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+          <Input
+            v-model="search"
+            placeholder="按端口 / IP / 备注 / 用户名搜索"
+            class="pl-8 h-9"
+          />
+        </div>
+        <Button variant="outline" size="sm" :disabled="store.loading" @click="store.reload()">
+          <RefreshCw :class="['size-4', store.loading && 'animate-spin']" />
+          <span class="hidden sm:inline">{{ t('action.refresh') }}</span>
+        </Button>
+        <Button size="sm" @click="router.push({ name: 'home' })">
+          <Plus class="size-4" />
+          <span class="hidden sm:inline">{{ t('action.create') }}</span>
+        </Button>
       </div>
     </header>
 
-    <a-card class="rules-card">
+    <!-- Card wrapper -->
+    <div class="rounded-lg border border-border bg-card overflow-hidden">
       <!-- Loading skeleton -->
-      <div v-if="store.loading && !store.active.length" class="loading-skel">
-        <a-skeleton :animation="true" v-for="i in 3" :key="i">
-          <a-skeleton-line :rows="2" :widths="['60%', '90%']" />
-        </a-skeleton>
+      <div v-if="store.loading && !store.active.length" class="p-6 flex flex-col gap-4">
+        <div v-for="i in 3" :key="i" class="flex gap-3 items-center">
+          <div class="h-4 w-16 rounded bg-muted animate-pulse" />
+          <div class="h-4 flex-1 rounded bg-muted animate-pulse" />
+        </div>
       </div>
 
-      <!-- Empty state -->
+      <!-- Empty -->
       <EmptyState
         v-else-if="!filtered.length && !search"
         icon="🛡️"
@@ -126,10 +146,10 @@ async function onDuplicate(rule: Rule) {
         description="你可以从首页快速创建一条临时端口规则，到期后会自动撤销。"
       >
         <template #action>
-          <a-button type="primary" @click="router.push({ name: 'home' })">
-            <template #icon><IconPlus /></template>
+          <Button @click="router.push({ name: 'home' })">
+            <Plus class="size-4" />
             {{ t('action.create') }}
-          </a-button>
+          </Button>
         </template>
       </EmptyState>
 
@@ -137,207 +157,216 @@ async function onDuplicate(rule: Rule) {
         v-else-if="!filtered.length && search"
         icon="🔍"
         title="没有匹配的规则"
-        :description="`没有规则匹配 “${search}”，试试换个关键词。`"
+        :description="`没有规则匹配 ${search}，试试换个关键词。`"
       />
 
       <!-- Desktop table -->
-      <a-table
-        v-else-if="!isMobile"
-        :data="filtered"
-        :pagination="false"
-        :scroll="{ x: 980 }"
-        row-key="id"
-        :bordered="false"
-        :hoverable="true"
-        size="medium"
-      >
-        <template #columns>
-          <a-table-column :title="t('rules.id')" :width="76" data-index="id">
-            <template #cell="{ record }">
-              <CopyableText :value="record.id" mono />
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('rules.source')" data-index="source_ip" :width="170">
-            <template #cell="{ record }">
-              <CopyableText :value="record.source_ip" mono />
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('rules.port') + ' / ' + t('rules.protocol')" :width="140">
-            <template #cell="{ record }">
-              <span class="port-cell">
-                <code>:{{ record.port }}</code>
-                <a-tag size="small" :color="record.protocol === 'udp' ? 'purple' : 'arcoblue'">
-                  {{ record.protocol.toUpperCase() }}
-                </a-tag>
-              </span>
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('rules.remaining')" :width="160">
-            <template #cell="{ record }">
-              <CountdownChip :expire-at="record.expire_at" :created-at="record.created_at" />
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('rules.createdAt')" :width="140">
-            <template #cell="{ record }">
-              <a-tooltip :content="dayjs(record.created_at).format('YYYY-MM-DD HH:mm:ss')">
-                <span class="muted">{{ dayjs(record.created_at).format('MM-DD HH:mm') }}</span>
-              </a-tooltip>
-            </template>
-          </a-table-column>
-          <a-table-column title="用户" data-index="created_by" :width="120">
-            <template #cell="{ record }">
-              <a-tag size="small" color="gray">{{ record.created_by || '-' }}</a-tag>
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('rules.note')" data-index="note" ellipsis tooltip />
-          <a-table-column :title="t('rules.actions')" :width="220" align="right" fixed="right">
-            <template #cell="{ record }">
-              <a-space :size="4">
-                <a-tooltip :content="t('action.extend')">
-                  <a-button size="small" type="text" @click="openExtend(record)">
-                    <template #icon><IconClockCircle /></template>
-                  </a-button>
-                </a-tooltip>
-                <a-tooltip :content="t('action.duplicate')">
-                  <a-button size="small" type="text" @click="onDuplicate(record)">
-                    <template #icon><IconCopy /></template>
-                  </a-button>
-                </a-tooltip>
-                <a-tooltip :content="t('action.terminate')">
-                  <a-button size="small" type="text" status="danger" @click="onTerminate(record)">
-                    <template #icon><IconCloseCircle /></template>
-                  </a-button>
-                </a-tooltip>
-              </a-space>
-            </template>
-          </a-table-column>
-        </template>
-      </a-table>
+      <div v-else class="hidden md:block">
+        <Table :container-class="'border-0 rounded-none'">
+          <TableHeader>
+            <TableRow class="bg-muted/50 hover:bg-muted/50">
+              <TableHead class="w-[72px]">{{ t('rules.id') }}</TableHead>
+              <TableHead class="w-[180px]">{{ t('rules.source') }}</TableHead>
+              <TableHead class="w-[170px]">{{ t('rules.port') }} / {{ t('rules.protocol') }}</TableHead>
+              <TableHead class="w-[140px]">{{ t('rules.remaining') }}</TableHead>
+              <TableHead class="w-[130px]">{{ t('rules.createdAt') }}</TableHead>
+              <TableHead class="w-[100px]">用户</TableHead>
+              <TableHead>{{ t('rules.note') }}</TableHead>
+              <TableHead class="w-[120px] text-right">{{ t('rules.actions') }}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="r in filtered" :key="r.id">
+              <TableCell><CopyableText :value="r.id" mono /></TableCell>
+              <TableCell class="max-w-[180px]">
+                <CopyableText :value="r.source_ip" mono truncate />
+              </TableCell>
+              <TableCell>
+                <div class="inline-flex items-center gap-1.5 min-w-0">
+                  <code class="font-mono font-semibold text-sm">{{ r.ports || r.port }}</code>
+                  <Badge :variant="protoVariant(r.protocol)" class="text-[10px] px-1.5 py-0">
+                    {{ r.protocol.toUpperCase() }}
+                  </Badge>
+                </div>
+              </TableCell>
+              <TableCell>
+                <CountdownChip :expire-at="r.expire_at" :created-at="r.created_at" />
+              </TableCell>
+              <TableCell>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <span class="text-xs text-muted-foreground font-mono">
+                      {{ dayjs(r.created_at).format('MM-DD HH:mm') }}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {{ dayjs(r.created_at).format('YYYY-MM-DD HH:mm:ss') }}
+                  </TooltipContent>
+                </Tooltip>
+              </TableCell>
+              <TableCell>
+                <Badge variant="outline" class="font-normal">{{ r.created_by || '-' }}</Badge>
+              </TableCell>
+              <TableCell class="max-w-0">
+                <Tooltip v-if="r.note">
+                  <TooltipTrigger as-child>
+                    <span class="block truncate text-sm text-foreground/80" :title="r.note">
+                      {{ r.note }}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent class="max-w-xs whitespace-pre-wrap">
+                    {{ r.note }}
+                  </TooltipContent>
+                </Tooltip>
+                <span v-else class="text-muted-foreground text-sm">—</span>
+              </TableCell>
+              <TableCell class="text-right whitespace-nowrap">
+                <div class="inline-flex gap-0.5">
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button variant="ghost" size="icon" class="size-8" @click="openExtend(r)">
+                        <Clock class="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{{ t('action.extend') }}</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button variant="ghost" size="icon" class="size-8" @click="onDuplicate(r)">
+                        <Copy class="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{{ t('action.duplicate') }}</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        @click="askTerminate(r)"
+                      >
+                        <XCircle class="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{{ t('action.terminate') }}</TooltipContent>
+                  </Tooltip>
+                </div>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
 
-      <!-- Mobile card list -->
-      <div v-else class="m-list">
-        <div v-for="r in filtered" :key="r.id" class="m-card">
-          <div class="m-card-head">
-            <span class="m-port"><code>:{{ r.port }}</code>
-              <a-tag size="small" :color="r.protocol === 'udp' ? 'purple' : 'arcoblue'">
+      <!-- Mobile cards -->
+      <div v-if="filtered.length" class="md:hidden p-3 flex flex-col gap-2.5">
+        <div
+          v-for="r in filtered"
+          :key="r.id"
+          class="rounded-md border border-border bg-card p-4 flex flex-col gap-3"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div class="inline-flex items-center gap-1.5 min-w-0">
+              <code class="font-mono font-semibold text-base truncate">{{ r.ports || r.port }}</code>
+              <Badge :variant="protoVariant(r.protocol)" class="text-[10px]">
                 {{ r.protocol.toUpperCase() }}
-              </a-tag>
-            </span>
+              </Badge>
+            </div>
             <CountdownChip :expire-at="r.expire_at" :created-at="r.created_at" size="small" />
           </div>
-          <div class="m-grid">
-            <div class="m-cell"><span class="muted">{{ t('rules.source') }}</span>
-              <CopyableText :value="r.source_ip" mono />
+          <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm min-w-0">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[11px] text-muted-foreground">{{ t('rules.source') }}</span>
+              <CopyableText :value="r.source_ip" mono truncate />
             </div>
-            <div class="m-cell"><span class="muted">{{ t('rules.id') }}</span>
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[11px] text-muted-foreground">ID</span>
               <CopyableText :value="r.id" mono />
             </div>
-            <div class="m-cell"><span class="muted">{{ t('rules.createdAt') }}</span>
-              <span class="mono">{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span>
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[11px] text-muted-foreground">{{ t('rules.createdAt') }}</span>
+              <span class="font-mono text-xs">{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span>
             </div>
-            <div class="m-cell"><span class="muted">用户</span>
-              <span>{{ r.created_by || '-' }}</span>
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[11px] text-muted-foreground">用户</span>
+              <span class="text-xs">{{ r.created_by || '-' }}</span>
             </div>
           </div>
-          <div v-if="r.note" class="m-note">📝 {{ r.note }}</div>
-          <div class="m-actions">
-            <a-button size="small" @click="openExtend(r)">
-              <template #icon><IconClockCircle /></template>
-              {{ t('action.extend') }}
-            </a-button>
-            <a-button size="small" @click="onDuplicate(r)">
-              <template #icon><IconCopy /></template>
-              {{ t('action.duplicate') }}
-            </a-button>
-            <a-button size="small" status="danger" @click="onTerminate(r)">
-              <template #icon><IconCloseCircle /></template>
-              {{ t('action.terminate') }}
-            </a-button>
+          <div
+            v-if="r.note"
+            class="text-xs text-muted-foreground bg-muted/50 rounded-md px-2.5 py-1.5"
+          >
+            📝 {{ r.note }}
+          </div>
+          <div class="grid grid-cols-3 gap-1.5">
+            <Button variant="outline" size="sm" @click="openExtend(r)">
+              <Clock class="size-3.5" />
+              <span class="text-xs">{{ t('action.extend') }}</span>
+            </Button>
+            <Button variant="outline" size="sm" @click="onDuplicate(r)">
+              <Copy class="size-3.5" />
+              <span class="text-xs">{{ t('action.duplicate') }}</span>
+            </Button>
+            <Button variant="outline" size="sm" class="text-destructive border-destructive/30 hover:bg-destructive/10" @click="askTerminate(r)">
+              <XCircle class="size-3.5" />
+              <span class="text-xs">{{ t('action.terminate') }}</span>
+            </Button>
           </div>
         </div>
       </div>
-    </a-card>
+    </div>
 
-    <a-modal v-model:visible="extendVisible" :title="t('rules.extendDialog')" @ok="submitExtend" unmount-on-close>
-      <a-form-item :label="t('rules.extendAmount')">
-        <a-radio-group v-model="extendSec" type="button">
-          <a-radio :value="15 * 60">15m</a-radio>
-          <a-radio :value="60 * 60">1h</a-radio>
-          <a-radio :value="4 * 60 * 60">4h</a-radio>
-          <a-radio :value="12 * 60 * 60">12h</a-radio>
-        </a-radio-group>
-      </a-form-item>
-    </a-modal>
+    <!-- Extend dialog -->
+    <Dialog v-model:open="extendVisible">
+      <DialogContent class="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{{ t('rules.extendDialog') }}</DialogTitle>
+        </DialogHeader>
+
+        <div class="flex flex-col gap-3">
+          <div class="text-sm text-muted-foreground">{{ t('rules.extendAmount') }}</div>
+          <div class="grid grid-cols-4 gap-2">
+            <button
+              v-for="opt in [
+                { label: '15m', value: 15 * 60 },
+                { label: '1h', value: 60 * 60 },
+                { label: '4h', value: 4 * 60 * 60 },
+                { label: '12h', value: 12 * 60 * 60 }
+              ]"
+              :key="opt.value"
+              type="button"
+              class="h-10 rounded-md border text-sm font-medium transition-colors"
+              :class="extendSec === opt.value
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'border-input text-muted-foreground hover:bg-accent hover:text-accent-foreground'"
+              @click="extendSec = opt.value"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" @click="extendVisible = false">{{ t('common.cancel') }}</Button>
+          <Button @click="submitExtend">{{ t('common.confirm') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Terminate confirm -->
+    <Dialog :open="!!confirmTarget" @update:open="(v: boolean) => !v && (confirmTarget = null)">
+      <DialogContent class="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{{ t('action.terminate') }}</DialogTitle>
+        </DialogHeader>
+        <div class="text-sm text-muted-foreground">
+          {{ t('rules.terminateConfirm') }}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="confirmTarget = null">{{ t('common.cancel') }}</Button>
+          <Button variant="destructive" @click="doTerminate">{{ t('action.terminate') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
-
-<style scoped>
-.rules-wrap { display: flex; flex-direction: column; gap: 16px; }
-.pp-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.pp-page-title { margin: 0; font-size: 20px; font-weight: 600; color: var(--color-text-1); }
-.pp-page-sub { margin: 4px 0 0; color: var(--color-text-3); font-size: 13px; }
-.pp-head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.search-box { width: 240px; }
-
-.rules-card { border-radius: 14px; }
-.rules-card :deep(.arco-card-body) { padding: 0; }
-.rules-card :deep(.arco-table-th) { background: var(--pp-surface-soft); font-weight: 600; }
-.rules-card :deep(.arco-table-tr-hover .arco-table-td) { background: var(--pp-brand-1) !important; }
-
-.port-cell { display: inline-flex; align-items: center; gap: 6px; }
-.port-cell code {
-  font-family: ui-monospace, monospace;
-  font-weight: 600;
-  color: var(--color-text-1);
-}
-.muted { color: var(--color-text-3); font-size: 12px; }
-.mono { font-family: ui-monospace, monospace; }
-.loading-skel { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
-
-/* Mobile cards */
-.m-list { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.m-card {
-  background: var(--pp-surface);
-  border: 1px solid var(--pp-border);
-  border-radius: 12px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.m-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.m-port { display: inline-flex; align-items: center; gap: 6px; }
-.m-port code { font-family: ui-monospace, monospace; font-weight: 600; font-size: 15px; }
-.m-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
-  font-size: 13px;
-}
-.m-cell { display: flex; flex-direction: column; gap: 2px; }
-.m-cell .muted { font-size: 11px; }
-.m-note {
-  background: var(--pp-surface-sunken);
-  padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--color-text-2);
-}
-.m-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.m-actions :deep(.arco-btn) { flex: 1; min-width: 0; }
-
-@media (max-width: 768px) {
-  .search-box { width: 100%; flex: 1; }
-  .pp-head-actions { width: 100%; }
-}
-</style>

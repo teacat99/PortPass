@@ -27,11 +27,16 @@ func (d *Mock) HealthCheck() error { return nil }
 func (d *Mock) Apply(r *model.Rule) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	ps := rulePorts(r)
+	port := r.Port
+	if !ps.Empty() {
+		port = ps.First()
+	}
 	d.applied[r.ID] = Applied{
 		CommentTag: CommentTag(r.ID),
 		RuleID:     r.ID,
 		SourceIP:   r.SourceIP,
-		Port:       r.Port,
+		Port:       port,
 		Protocol:   r.Protocol,
 	}
 	return "mock", nil

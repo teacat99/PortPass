@@ -37,16 +37,28 @@ func (d *Firewalld) HealthCheck() error {
 	return run("firewall-cmd", "--state")
 }
 
-// Apply emits one rich-rule per (family, protocol) combination so the
-// operator can still inspect them granularly with `firewall-cmd --list-rich-rules`.
+// Apply emits one rich-rule per (family, protocol, port-range) combination.
+// firewalld rich-rules accept a single port or a "from-to" range per
+// rule, so multi-range port groups expand into multiple rich rules that
+// share the same `log prefix` tag for later discovery.
 func (d *Firewalld) Apply(r *model.Rule) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	tag := CommentTag(r.ID)
+	ps := rulePorts(r)
+	if ps.Empty() {
+		return "", fmt.Errorf("no ports on rule %d", r.ID)
+	}
 	for _, proto := range expandProto(r.Protocol) {
-		rule := buildRichRule(r.SourceIP, r.Port, proto, tag)
-		if err := run("firewall-cmd", "--add-rich-rule="+rule); err != nil {
-			return "", err
+		for _, rng := range ps.Ranges {
+			port := strconv.Itoa(rng.From)
+			if rng.From != rng.To {
+				port = fmt.Sprintf("%d-%d", rng.From, rng.To)
+			}
+			rule := buildRichRule(r.SourceIP, port, proto, tag)
+			if err := run("firewall-cmd", "--add-rich-rule="+rule); err != nil {
+				return "", err
+			}
 		}
 	}
 	return "firewalld", nil
@@ -94,7 +106,9 @@ func (d *Firewalld) findRichRules(tag string) ([]string, error) {
 
 // buildRichRule emits the rich-rule string. When SourceIP is empty or the
 // zero CIDR we omit the source clause so the rule applies to any client.
-func buildRichRule(source string, port int, proto, tag string) string {
+// `port` is already a string so the caller can supply "22" or "8080-8090"
+// uniformly.
+func buildRichRule(source, port, proto, tag string) string {
 	family := "ipv4"
 	if strings.Contains(source, ":") {
 		family = "ipv6"
@@ -104,7 +118,7 @@ func buildRichRule(source string, port int, proto, tag string) string {
 		srcClause = fmt.Sprintf(` source address="%s"`, s)
 	}
 	return fmt.Sprintf(
-		`rule family="%s"%s port port="%d" protocol="%s" log prefix="%s" level="info" limit value="1/m" accept`,
+		`rule family="%s"%s port port="%s" protocol="%s" log prefix="%s" level="info" limit value="1/m" accept`,
 		family, srcClause, port, proto, tag,
 	)
 }

@@ -8,19 +8,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <title>PortPass · 临时端口开放</title>
-    <style>
-      /* Anti-flash: paint the background in the persisted scheme before
-         the Vue bundle has a chance to mount. */
-      (function(){})();
-    </style>
     <script>
+      // Anti-flash: apply the persisted colour scheme before Vue mounts so
+      // the first paint matches the user's preference. `dark` class on the
+      // root element is consumed by Tailwind's @custom-variant dark hook.
       (function () {
         try {
           var v = localStorage.getItem('portpass.theme');
           var dark = v === 'dark' || (v !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (dark) {
-            document.documentElement.style.background = '#14161a';
-            document.body && document.body.setAttribute('arco-theme', 'dark');
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.background = '#0f1216';
           } else {
             document.documentElement.style.background = '#f6f8fb';
           }

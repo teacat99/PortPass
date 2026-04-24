@@ -37,14 +37,25 @@ func (d *UFW) Apply(r *model.Rule) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	tag := CommentTag(r.ID)
+	ps := rulePorts(r)
+	if ps.Empty() {
+		return "", fmt.Errorf("no ports on rule %d", r.ID)
+	}
 	for _, proto := range expandProto(r.Protocol) {
-		args := []string{"allow"}
-		if src := canonicalSource(r.SourceIP); src != "" {
-			args = append(args, "from", src, "to", "any")
-		}
-		args = append(args, "port", strconv.Itoa(r.Port), "proto", proto, "comment", tag)
-		if err := run("ufw", args...); err != nil {
-			return "", err
+		for _, rng := range ps.Ranges {
+			portArg := strconv.Itoa(rng.From)
+			if rng.From != rng.To {
+				// ufw supports the "from:to" port range syntax.
+				portArg = fmt.Sprintf("%d:%d", rng.From, rng.To)
+			}
+			args := []string{"allow"}
+			if src := canonicalSource(r.SourceIP); src != "" {
+				args = append(args, "from", src, "to", "any")
+			}
+			args = append(args, "port", portArg, "proto", proto, "comment", tag)
+			if err := run("ufw", args...); err != nil {
+				return "", err
+			}
 		}
 	}
 	return "ufw", nil

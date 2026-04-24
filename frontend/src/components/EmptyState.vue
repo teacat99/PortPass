@@ -2,56 +2,24 @@
 defineProps<{
   title?: string
   description?: string
-  /** Lucide-style emoji or single character used as a soft illustration. */
+  /** Short emoji or glyph rendered inside the circular illustration frame. */
   icon?: string
 }>()
 </script>
 
 <template>
-  <div class="pp-empty">
-    <div class="pp-empty-illu">{{ icon ?? '✨' }}</div>
-    <div class="pp-empty-title">{{ title }}</div>
-    <div v-if="description" class="pp-empty-desc">{{ description }}</div>
-    <div v-if="$slots.action" class="pp-empty-action">
+  <div class="flex flex-col items-center justify-center py-12 px-4 gap-2 text-muted-foreground">
+    <div class="mb-1.5 size-[72px] rounded-2xl flex items-center justify-center text-3xl bg-muted text-primary">
+      {{ icon ?? '✨' }}
+    </div>
+    <div v-if="title" class="text-base font-semibold text-foreground">
+      {{ title }}
+    </div>
+    <div v-if="description" class="max-w-xs text-center text-sm leading-relaxed">
+      {{ description }}
+    </div>
+    <div v-if="$slots.action" class="mt-3">
       <slot name="action" />
     </div>
   </div>
 </template>
-
-<style scoped>
-.pp-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 16px;
-  color: var(--color-text-3);
-  gap: 8px;
-}
-.pp-empty-illu {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 32px;
-  background: var(--pp-surface-sunken);
-  color: var(--pp-brand-6);
-  margin-bottom: 6px;
-}
-.pp-empty-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-text-1);
-}
-.pp-empty-desc {
-  max-width: 320px;
-  text-align: center;
-  font-size: 13px;
-  line-height: 1.6;
-}
-.pp-empty-action {
-  margin-top: 12px;
-}
-</style>

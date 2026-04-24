@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Message } from '@arco-design/web-vue'
-import { IconCopy, IconCheck } from '@arco-design/web-vue/es/icon'
+import { Copy, Check } from 'lucide-vue-next'
+import { toast } from 'vue-sonner'
 
 const props = defineProps<{
   value: string | number
   /** Override what gets put on the clipboard (vs displayed). */
   copyValue?: string
-  /** Render value in monospace */
+  /** Render value in monospace font. */
   mono?: boolean
   /** Hide the displayed value, show only the copy icon. */
   iconOnly?: boolean
+  /** When true (default) truncates overflow; set false to allow wrapping. */
+  truncate?: boolean
 }>()
 
 const copied = ref(false)
@@ -21,45 +23,34 @@ async function copy() {
   try {
     await navigator.clipboard.writeText(v)
     copied.value = true
-    Message.success({ content: '已复制', duration: 1200 })
+    toast.success('已复制', { duration: 1200 })
     setTimeout(() => { copied.value = false }, 1500)
   } catch {
-    Message.error('复制失败，请手动选择文本')
+    toast.error('复制失败，请手动选择文本')
   }
 }
 </script>
 
 <template>
-  <span class="pp-copyable" :class="{ 'mono': mono }" @click="copy">
-    <span v-if="!iconOnly" class="pp-copyable-text">{{ value }}</span>
-    <component :is="copied ? IconCheck : IconCopy" class="pp-copyable-icon" />
+  <span
+    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted transition-colors cursor-pointer max-w-full group align-middle"
+    role="button"
+    tabindex="0"
+    :title="String(copyValue ?? value ?? '')"
+    @click="copy"
+    @keydown.enter.prevent="copy"
+  >
+    <span
+      v-if="!iconOnly"
+      class="select-text leading-none"
+      :class="[
+        mono ? 'font-mono tabular-nums' : '',
+        truncate === false ? '' : 'truncate'
+      ]"
+    >{{ value }}</span>
+    <component
+      :is="copied ? Check : Copy"
+      class="size-3.5 shrink-0 opacity-40 group-hover:opacity-100 group-hover:text-primary transition-opacity"
+    />
   </span>
 </template>
-
-<style scoped>
-.pp-copyable {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
-  transition: background 0.15s ease;
-  user-select: text;
-}
-.pp-copyable:hover {
-  background: var(--pp-surface-sunken);
-}
-.pp-copyable.mono .pp-copyable-text {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-}
-.pp-copyable-icon {
-  font-size: 13px;
-  color: var(--color-text-3);
-  opacity: 0.6;
-}
-.pp-copyable:hover .pp-copyable-icon {
-  opacity: 1;
-  color: var(--pp-brand-6);
-}
-</style>

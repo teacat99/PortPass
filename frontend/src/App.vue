@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn'
-import enUS from '@arco-design/web-vue/es/locale/lang/en-us'
-import { useI18n } from 'vue-i18n'
-
-const { locale } = useI18n()
-const arcoLocale = computed(() => (locale.value === 'en-US' ? enUS : zhCN))
+import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 </script>
 
 <template>
-  <a-config-provider :locale="arcoLocale">
+  <TooltipProvider>
     <router-view />
-  </a-config-provider>
+    <Toaster />
+  </TooltipProvider>
 </template>

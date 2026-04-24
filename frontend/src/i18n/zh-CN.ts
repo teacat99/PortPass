@@ -10,6 +10,64 @@ export default {
     users: '用户',
     settings: '设置'
   },
+  role: {
+    admin: '管理员',
+    user: '普通用户'
+  },
+  common: {
+    cancel: '取消',
+    confirm: '确认',
+    save: '保存',
+    delete: '删除',
+    edit: '编辑',
+    close: '关闭',
+    all: '全部'
+  },
+  pwa: {
+    title: '安装 PortPass 到主屏幕',
+    desc: '获得独立窗口、更快启动和桌面图标',
+    install: '立即安装',
+    later: '稍后再说',
+    iosHint: '在 Safari 点击"分享" → "添加到主屏幕"',
+    dismissHint: '14 天内不再提醒'
+  },
+  portSet: {
+    placeholder: '例如 22 或 80,443,8080-8090',
+    invalid: '端口格式无效',
+    count: '{n} 个端口',
+    entries: '{n} 段'
+  },
+  protected: {
+    title: '受保护端口',
+    subtitle: '这些端口已被业务占用，任何人（含管理员）都不能临时开放',
+    empty: '暂无受保护端口',
+    name: '名称',
+    ports: '端口集',
+    protocol: '协议',
+    note: '备注',
+    new: '新增受保护端口',
+    edit: '编辑受保护端口',
+    deleteConfirm: '确定要移除该受保护端口吗？',
+    conflictWithPreset: '与已有用户可用预设冲突，请先调整预设'
+  },
+  userRanges: {
+    drawerTitle: '个人端口策略',
+    drawerSub: '设置该用户可临时开放的端口范围',
+    column: '端口策略',
+    colDefault: '未设置 · 使用默认',
+    colCount: '{n} 条自定义',
+    emptyNote: '尚未为该用户设置个人策略；将使用"用户可用"的预设端口。',
+    overrideNote: '已启用个人策略：该用户仅能开放下方允许的端口，完全覆盖系统默认预设。',
+    addRange: '添加范围',
+    editRange: '编辑范围',
+    clearAll: '清空个人策略',
+    clearAllConfirm: '确定要清空该用户的个人端口策略吗？清空后将回退到默认预设。',
+    name: '名称',
+    ports: '端口集',
+    protocol: '协议',
+    maxDuration: '单次最长时长（秒，0 不限）',
+    note: '备注'
+  },
   action: {
     submit: '提交',
     cancel: '取消',
@@ -143,10 +201,16 @@ export default {
   },
   settings: {
     title: '设置',
+    tabUsers: '用户管理',
     tabPresets: '预设端口',
+    tabProtected: '受保护端口',
+    tabRuntime: '运行时参数',
     tabDefaults: '默认参数',
     tabProxies: '可信代理',
     tabAuth: '鉴权模式',
+    sectionBasics: '基础运行',
+    sectionProxies: '可信代理',
+    sectionAuth: '鉴权模式',
     authMode: '当前鉴权模式',
     firewallDriver: '防火墙驱动',
     maxDuration: '单条规则最大有效期（小时）',
@@ -154,8 +218,10 @@ export default {
     trustedProxies: '可信反代 CIDR 列表',
     userAllowed: '普通用户可用',
     userAllowedHelp: '勾选后普通用户可在此端口创建规则',
-    maxDurationSec: '普通用户单次最大时长 (秒)',
-    maxDurationSecHelp: '0 表示不额外限制（仍受全局最大时长约束）'
+    maxDurationSec: '用户最大单次时长/秒',
+    maxDurationSecHelp: '0 表示不额外限制（仍受全局最大时长约束）',
+    envHint: '释义',
+    envValue: '值'
   },
   login: {
     title: '登录 PortPass',
@@ -194,6 +260,8 @@ export default {
     userUpdated: '用户已更新',
     userDeleted: '用户已删除',
     loadFailed: '加载失败',
-    invalidInput: '输入无效'
+    invalidInput: '输入无效',
+    saved: '已保存',
+    deleted: '已删除'
   }
 }

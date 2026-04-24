@@ -47,11 +47,19 @@ func (d *NFTables) Apply(r *model.Rule) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	tag := CommentTag(r.ID)
+	ps := rulePorts(r)
+	if ps.Empty() {
+		return "", fmt.Errorf("no ports on rule %d", r.ID)
+	}
+	dportExpr := fmt.Sprintf("dport %d", ps.Ranges[0].From)
+	if ps.EntryCount() > 1 || ps.Ranges[0].From != ps.Ranges[0].To {
+		dportExpr = fmt.Sprintf("dport { %s }", ps.NFTablesFormat())
+	}
 	lines := make([]string, 0, 2)
 	for _, proto := range expandProto(r.Protocol) {
 		lines = append(lines, fmt.Sprintf(
-			`add rule inet portpass input %s %s dport %d accept comment "%s"`,
-			saddrExpr(r.SourceIP), proto, r.Port, tag,
+			`add rule inet portpass input %s %s %s accept comment "%s"`,
+			saddrExpr(r.SourceIP), proto, dportExpr, tag,
 		))
 	}
 	if err := runStdin(strings.Join(lines, "\n"), "nft", "-f", "-"); err != nil {

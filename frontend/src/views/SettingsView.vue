@@ -1,85 +1,150 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Message, Modal } from '@arco-design/web-vue'
 import {
-  IconPlus, IconRefresh, IconEdit, IconDelete,
-  IconSafe, IconClockCircle, IconStorage, IconCommon, IconLock
-} from '@arco-design/web-vue/es/icon'
+  Plus, RefreshCw, Pencil, Trash2,
+  ShieldCheck, Clock, Database, Cog,
+  Lock, Users as UsersIcon, Settings as SettingsIcon,
+  AlertTriangle, Package
+} from 'lucide-vue-next'
 import { deletePreset, getSettings, listPresets, upsertPreset } from '@/api/rules'
-import type { PresetPort, SettingsBundle } from '@/api/types'
-import { useBreakpoint } from '@/composables/useBreakpoint'
+import {
+  listProtectedPorts, upsertProtectedPort, deleteProtectedPort, listUserRanges
+} from '@/api/policy'
+import {
+  createUser, deleteUser, listUsers, resetUserPassword, updateUser
+} from '@/api/users'
+import type {
+  PresetPort, ProtectedPort, SettingsBundle, User, Role
+} from '@/api/types'
+import { useAuthStore } from '@/stores/auth'
 import { categorize } from '@/utils/presetCategory'
+import { envHint } from '@/utils/envMeta'
+import { Message } from '@/lib/toast'
+
 import EmptyState from '@/components/EmptyState.vue'
+import PortSetInput from '@/components/PortSetInput.vue'
+import UserRangesDrawer from '@/components/UserRangesDrawer.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  Tabs, TabsList, TabsTrigger, TabsContent
+} from '@/components/ui/tabs'
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem
+} from '@/components/ui/select'
+import {
+  Table, TableHeader, TableBody, TableRow, TableHead, TableCell
+} from '@/components/ui/table'
+import {
+  Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle
+} from '@/components/ui/dialog'
+import {
+  Tooltip, TooltipTrigger, TooltipContent
+} from '@/components/ui/tooltip'
 
 const { t, locale } = useI18n()
-const { isMobile } = useBreakpoint()
+const auth = useAuthStore()
+
+const activeTab = ref<'users' | 'presets' | 'protected' | 'runtime'>('users')
 
 const settings = ref<SettingsBundle | null>(null)
 const presets = ref<PresetPort[]>([])
+const protectedPorts = ref<ProtectedPort[]>([])
+const users = ref<User[]>([])
+const userRangeCounts = ref<Record<number, number>>({})
 const loading = ref(false)
-
-const editVisible = ref(false)
-const editing = ref<Partial<PresetPort>>({})
-const isEditingExisting = computed(() => !!editing.value.id)
-
-const newPresetLabel = computed(() => locale.value === 'zh-CN' ? '新建预设' : 'New preset')
-const editPresetLabel = computed(() => locale.value === 'zh-CN' ? '编辑预设' : 'Edit preset')
 
 async function reload() {
   loading.value = true
   try {
-    const [s, p] = await Promise.all([getSettings(), listPresets()])
+    const [s, p, pp, us] = await Promise.all([
+      getSettings(),
+      listPresets(),
+      listProtectedPorts().catch(() => []),
+      listUsers().catch(() => [])
+    ])
     settings.value = s
     presets.value = p
+    protectedPorts.value = pp
+    users.value = us
+    await refreshRangeCounts()
   } finally {
     loading.value = false
   }
 }
 
+async function refreshRangeCounts() {
+  const next: Record<number, number> = {}
+  for (const u of users.value) {
+    try {
+      const r = await listUserRanges(u.id)
+      next[u.id] = r.length
+    } catch {
+      next[u.id] = 0
+    }
+  }
+  userRangeCounts.value = next
+}
+
 onMounted(reload)
 
-function openCreate() {
-  editing.value = {
+// ─────────── Presets ───────────
+const presetEditVisible = ref(false)
+const presetEditing = ref<Partial<PresetPort>>({})
+const presetPortsValid = ref({ ok: false, error: null as string | null })
+const isEditingPreset = computed(() => !!presetEditing.value.id)
+const confirmPresetTarget = ref<PresetPort | null>(null)
+
+function openPresetCreate() {
+  presetEditing.value = {
     name: '',
-    port: undefined,
+    ports: '',
     protocol: 'tcp',
     sort: 99,
     user_allowed: false,
     max_duration_sec: 0
   }
-  editVisible.value = true
+  presetPortsValid.value = { ok: false, error: null }
+  presetEditVisible.value = true
 }
 
-function openEdit(p: PresetPort) {
-  editing.value = { ...p }
-  editVisible.value = true
+function openPresetEdit(p: PresetPort) {
+  presetEditing.value = { ...p, ports: p.ports || String(p.port || '') }
+  presetPortsValid.value = { ok: true, error: null }
+  presetEditVisible.value = true
 }
 
-async function saveEdit() {
-  if (!editing.value.name?.trim() || !editing.value.port) {
+async function savePreset() {
+  if (!presetEditing.value.name?.trim()) {
     Message.warning(t('msg.invalidInput'))
-    return false
+    return
   }
-  await upsertPreset(editing.value)
-  Message.success(t('msg.presetSaved'))
-  editVisible.value = false
-  await reload()
-  return true
+  if (!presetPortsValid.value.ok) {
+    Message.warning(presetPortsValid.value.error || t('msg.invalidInput'))
+    return
+  }
+  try {
+    await upsertPreset(presetEditing.value)
+    Message.success(t('msg.presetSaved'))
+    presetEditVisible.value = false
+    await reload()
+  } catch {
+    /* interceptor */
+  }
 }
 
-async function removePreset(p: PresetPort) {
-  Modal.warning({
-    title: t('action.delete') + ' · ' + p.name,
-    content: `${p.port}/${p.protocol}`,
-    hideCancel: false,
-    okButtonProps: { status: 'danger' },
-    onOk: async () => {
-      await deletePreset(p.id)
-      Message.success(t('msg.presetDeleted'))
-      await reload()
-    }
-  })
+async function doRemovePreset() {
+  if (!confirmPresetTarget.value) return
+  const id = confirmPresetTarget.value.id
+  confirmPresetTarget.value = null
+  await deletePreset(id)
+  Message.success(t('msg.presetDeleted'))
+  await reload()
 }
 
 function fmtDuration(sec: number): string {
@@ -91,391 +156,1140 @@ function fmtDuration(sec: number): string {
 
 const presetCount = computed(() => presets.value.length)
 const userAllowedCount = computed(() => presets.value.filter((p) => p.user_allowed).length)
+
+// ─────────── Protected ───────────
+const protectedEditVisible = ref(false)
+const protectedEditing = ref<Partial<ProtectedPort>>({})
+const protectedPortsValid = ref({ ok: false, error: null as string | null })
+const confirmProtectedTarget = ref<ProtectedPort | null>(null)
+
+function openProtectedCreate() {
+  protectedEditing.value = { name: '', ports: '', protocol: 'tcp', note: '' }
+  protectedPortsValid.value = { ok: false, error: null }
+  protectedEditVisible.value = true
+}
+
+function openProtectedEdit(p: ProtectedPort) {
+  protectedEditing.value = { ...p }
+  protectedPortsValid.value = { ok: true, error: null }
+  protectedEditVisible.value = true
+}
+
+async function saveProtected() {
+  if (!protectedEditing.value.name?.trim()) {
+    Message.warning(t('msg.invalidInput'))
+    return
+  }
+  if (!protectedPortsValid.value.ok) {
+    Message.warning(protectedPortsValid.value.error || t('msg.invalidInput'))
+    return
+  }
+  try {
+    await upsertProtectedPort(protectedEditing.value)
+    Message.success(t('msg.saved'))
+    protectedEditVisible.value = false
+    await reload()
+  } catch {
+    /* interceptor */
+  }
+}
+
+async function doRemoveProtected() {
+  if (!confirmProtectedTarget.value) return
+  const id = confirmProtectedTarget.value.id
+  confirmProtectedTarget.value = null
+  await deleteProtectedPort(id)
+  Message.success(t('msg.deleted'))
+  await reload()
+}
+
+// ─────────── Users ───────────
+const avatarPalette = ['#165dff', '#0fc6c2', '#722ed1', '#f5319d', '#ff7d00', '#00b42a']
+function avatarColor(name: string): string {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return avatarPalette[h % avatarPalette.length]
+}
+function avatarLetter(name: string): string {
+  return (name.trim()[0] ?? '?').toUpperCase()
+}
+function strengthOf(v: string): { score: number; label: string } {
+  if (!v) return { score: 0, label: '' }
+  let s = 0
+  if (v.length >= 6) s++
+  if (v.length >= 10) s++
+  if (/[A-Z]/.test(v) && /[a-z]/.test(v)) s++
+  if (/\d/.test(v)) s++
+  if (/[^A-Za-z0-9]/.test(v)) s++
+  return { score: s, label: ['', '太弱', '一般', '中等', '不错', '很强'][s] || '' }
+}
+
+const userCreateModal = ref(false)
+const userCreateForm = reactive({ username: '', password: '', role: 'user' as Role })
+const userCreateSubmitting = ref(false)
+const userResetModal = ref(false)
+const userResetTarget = ref<User | null>(null)
+const userResetForm = reactive({ new_password: '', confirm: '' })
+const userResetSubmitting = ref(false)
+const rangesDrawer = ref(false)
+const rangesDrawerUser = ref<User | null>(null)
+const confirmUserTarget = ref<User | null>(null)
+
+const activeAdminCount = computed(
+  () => users.value.filter((u) => u.role === 'admin' && !u.disabled).length
+)
+
+function isSelf(u: User) {
+  return auth.me?.id === u.id
+}
+
+function openUserCreate() {
+  userCreateForm.username = ''
+  userCreateForm.password = ''
+  userCreateForm.role = 'user'
+  userCreateModal.value = true
+}
+
+async function submitUserCreate() {
+  if (!userCreateForm.username.trim() || userCreateForm.password.length < 6) {
+    Message.warning(t('password.too_short'))
+    return
+  }
+  userCreateSubmitting.value = true
+  try {
+    await createUser({
+      username: userCreateForm.username.trim(),
+      password: userCreateForm.password,
+      role: userCreateForm.role
+    })
+    Message.success(t('msg.userCreated'))
+    userCreateModal.value = false
+    await reload()
+  } catch {
+    /* interceptor */
+  } finally {
+    userCreateSubmitting.value = false
+  }
+}
+
+async function changeRole(u: User, newRole: Role) {
+  if (isSelf(u)) {
+    Message.warning(t('users.selfCannotModify'))
+    await reload()
+    return
+  }
+  if (u.role === 'admin' && newRole !== 'admin' && !u.disabled && activeAdminCount.value <= 1) {
+    Message.warning(t('users.lastAdminWarn'))
+    await reload()
+    return
+  }
+  try {
+    await updateUser(u.id, { role: newRole })
+    Message.success(t('msg.userUpdated'))
+    await reload()
+  } catch {
+    await reload()
+  }
+}
+
+async function toggleDisabled(u: User, enabled: boolean) {
+  const disabled = !enabled
+  if (isSelf(u)) {
+    Message.warning(t('users.selfCannotModify'))
+    await reload()
+    return
+  }
+  if (u.role === 'admin' && disabled && !u.disabled && activeAdminCount.value <= 1) {
+    Message.warning(t('users.lastAdminWarn'))
+    await reload()
+    return
+  }
+  try {
+    await updateUser(u.id, { disabled })
+    Message.success(t('msg.userUpdated'))
+    await reload()
+  } catch {
+    await reload()
+  }
+}
+
+function openUserReset(u: User) {
+  userResetTarget.value = u
+  userResetForm.new_password = ''
+  userResetForm.confirm = ''
+  userResetModal.value = true
+}
+
+async function submitUserReset() {
+  if (!userResetTarget.value) return
+  if (userResetForm.new_password.length < 6) {
+    Message.warning(t('password.too_short'))
+    return
+  }
+  if (userResetForm.new_password !== userResetForm.confirm) {
+    Message.warning(t('password.mismatch'))
+    return
+  }
+  userResetSubmitting.value = true
+  try {
+    await resetUserPassword(userResetTarget.value.id, userResetForm.new_password)
+    Message.success(t('password.changed'))
+    userResetModal.value = false
+  } catch {
+    /* interceptor */
+  } finally {
+    userResetSubmitting.value = false
+  }
+}
+
+function askUserDelete(u: User) {
+  if (isSelf(u)) {
+    Message.warning(t('users.selfCannotModify'))
+    return
+  }
+  confirmUserTarget.value = u
+}
+
+async function doUserDelete() {
+  if (!confirmUserTarget.value) return
+  const id = confirmUserTarget.value.id
+  confirmUserTarget.value = null
+  try {
+    await deleteUser(id)
+    Message.success(t('msg.userDeleted'))
+    await reload()
+  } catch {
+    /* interceptor */
+  }
+}
+
+function openRangesDrawer(u: User) {
+  rangesDrawerUser.value = u
+  rangesDrawer.value = true
+}
+
+const createStrength = computed(() => strengthOf(userCreateForm.password))
+const resetStrength = computed(() => strengthOf(userResetForm.new_password))
+
+// ─────────── Runtime ───────────
+const runtimeKeys = [
+  'PORTPASS_LISTEN',
+  'PORTPASS_DATA_DIR',
+  'PORTPASS_FIREWALL_DRIVER',
+  'PORTPASS_MAX_DURATION_HOURS',
+  'PORTPASS_HISTORY_RETENTION_DAYS',
+  'PORTPASS_MAX_RULES_PER_IP',
+  'PORTPASS_RATE_LIMIT_PER_MINUTE_PER_IP'
+]
+
+function settingValue(key: string): string {
+  if (!settings.value) return '—'
+  if (key === 'PORTPASS_FIREWALL_DRIVER') return settings.value.firewall_driver
+  if (key === 'PORTPASS_MAX_DURATION_HOURS') return String(settings.value.max_duration_hours)
+  if (key === 'PORTPASS_HISTORY_RETENTION_DAYS') return String(settings.value.history_retention_days)
+  if (key === 'PORTPASS_AUTH_MODE') return settings.value.auth_mode
+  const kv = settings.value.kv?.find((k) => k.key === key)
+  return kv?.value || '—'
+}
+
+function protoVariant(p: string) {
+  return p === 'udp' ? 'secondary' : 'default'
+}
+
+const protocolOptions = ['tcp', 'udp', 'both'] as const
 </script>
 
 <template>
-  <div class="pp-page settings-wrap">
-    <header class="pp-card-head">
+  <div class="pp-page flex flex-col gap-4">
+    <!-- Header -->
+    <header class="flex items-end justify-between gap-4 flex-wrap">
       <div>
-        <h1 class="pp-page-title">{{ t('settings.title') }}</h1>
-        <p class="pp-page-sub">管理预设端口、查看运行时默认参数与鉴权策略</p>
+        <h1 class="text-xl font-semibold text-foreground m-0">{{ t('settings.title') }}</h1>
+        <p class="text-sm text-muted-foreground mt-1 m-0">用户、预设端口、受保护端口与运行时参数</p>
       </div>
-      <div class="pp-head-actions">
-        <a-button @click="reload" :loading="loading">
-          <template #icon><IconRefresh /></template>
-          {{ t('action.refresh') }}
-        </a-button>
-      </div>
+      <Button variant="outline" size="sm" :disabled="loading" @click="reload">
+        <RefreshCw :class="['size-4', loading && 'animate-spin']" />
+        {{ t('action.refresh') }}
+      </Button>
     </header>
 
-    <!-- Runtime overview cards: a quick "system status" snapshot. -->
-    <section v-if="settings" class="overview">
-      <div class="ov-card">
-        <div class="ov-icon" style="background: rgba(22,93,255,0.1); color: var(--pp-brand-6)"><IconSafe /></div>
-        <div class="ov-meta">
-          <div class="ov-label">鉴权模式</div>
-          <div class="ov-value">{{ settings.auth_mode }}</div>
+    <!-- Runtime overview -->
+    <section v-if="settings" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="rounded-md border border-border bg-card p-3 md:p-4 flex items-center gap-3">
+        <div class="size-10 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          <ShieldCheck class="size-5" />
+        </div>
+        <div class="min-w-0">
+          <div class="text-xs text-muted-foreground">鉴权模式</div>
+          <div class="text-sm md:text-base font-semibold truncate">{{ settings.auth_mode }}</div>
         </div>
       </div>
-      <div class="ov-card">
-        <div class="ov-icon" style="background: rgba(0,180,42,0.1); color: var(--pp-status-active)"><IconCommon /></div>
-        <div class="ov-meta">
-          <div class="ov-label">防火墙驱动</div>
-          <div class="ov-value">{{ settings.firewall_driver }}</div>
+      <div class="rounded-md border border-border bg-card p-3 md:p-4 flex items-center gap-3">
+        <div class="size-10 rounded-md bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+          <Cog class="size-5" />
+        </div>
+        <div class="min-w-0">
+          <div class="text-xs text-muted-foreground">防火墙驱动</div>
+          <div class="text-sm md:text-base font-semibold truncate">{{ settings.firewall_driver }}</div>
         </div>
       </div>
-      <div class="ov-card">
-        <div class="ov-icon" style="background: rgba(255,125,0,0.1); color: var(--pp-status-pending)"><IconClockCircle /></div>
-        <div class="ov-meta">
-          <div class="ov-label">单条规则上限</div>
-          <div class="ov-value">{{ settings.max_duration_hours }} 小时</div>
+      <div class="rounded-md border border-border bg-card p-3 md:p-4 flex items-center gap-3">
+        <div class="size-10 rounded-md bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
+          <Clock class="size-5" />
+        </div>
+        <div class="min-w-0">
+          <div class="text-xs text-muted-foreground">单条规则上限</div>
+          <div class="text-sm md:text-base font-semibold truncate">{{ settings.max_duration_hours }} 小时</div>
         </div>
       </div>
-      <div class="ov-card">
-        <div class="ov-icon" style="background: rgba(114,46,209,0.1); color: #722ed1"><IconStorage /></div>
-        <div class="ov-meta">
-          <div class="ov-label">历史保留</div>
-          <div class="ov-value">{{ settings.history_retention_days }} 天</div>
+      <div class="rounded-md border border-border bg-card p-3 md:p-4 flex items-center gap-3">
+        <div class="size-10 rounded-md bg-violet-500/10 text-violet-600 flex items-center justify-center shrink-0">
+          <Database class="size-5" />
+        </div>
+        <div class="min-w-0">
+          <div class="text-xs text-muted-foreground">历史保留</div>
+          <div class="text-sm md:text-base font-semibold truncate">{{ settings.history_retention_days }} 天</div>
         </div>
       </div>
     </section>
 
-    <a-card class="settings-card">
-      <a-tabs default-active-key="presets" :auto-switch="false">
-        <a-tab-pane key="presets">
-          <template #title>
-            <span class="tab-title">📦 {{ t('settings.tabPresets') }}
-              <a-tag size="small" color="arcoblue">{{ presetCount }}</a-tag>
-            </span>
-          </template>
+    <!-- Tabs -->
+    <Tabs v-model="activeTab" class="w-full">
+      <TabsList class="grid grid-cols-4 w-full md:w-auto md:inline-grid bg-muted/60 p-1 rounded-md">
+        <TabsTrigger value="users" class="gap-1.5">
+          <UsersIcon class="size-3.5" />
+          <span class="hidden sm:inline">{{ t('settings.tabUsers') }}</span>
+          <span class="sm:hidden">用户</span>
+          <Badge variant="default" class="text-[10px] h-4 px-1.5 ml-0.5">{{ users.length }}</Badge>
+        </TabsTrigger>
+        <TabsTrigger value="presets" class="gap-1.5">
+          <Package class="size-3.5" />
+          <span class="hidden sm:inline">{{ t('settings.tabPresets') }}</span>
+          <span class="sm:hidden">预设</span>
+          <Badge variant="default" class="text-[10px] h-4 px-1.5 ml-0.5">{{ presetCount }}</Badge>
+        </TabsTrigger>
+        <TabsTrigger value="protected" class="gap-1.5">
+          <AlertTriangle class="size-3.5" />
+          <span class="hidden sm:inline">{{ t('settings.tabProtected') }}</span>
+          <span class="sm:hidden">受保护</span>
+          <Badge variant="destructive" class="text-[10px] h-4 px-1.5 ml-0.5">{{ protectedPorts.length }}</Badge>
+        </TabsTrigger>
+        <TabsTrigger value="runtime" class="gap-1.5">
+          <SettingsIcon class="size-3.5" />
+          <span class="hidden sm:inline">{{ t('settings.tabRuntime') }}</span>
+          <span class="sm:hidden">运行时</span>
+        </TabsTrigger>
+      </TabsList>
 
-          <div class="tab-body">
-            <div class="tab-toolbar">
-              <p class="tab-help">
-                普通用户仅能在勾选了「普通用户可用」的端口上创建规则，
-                <strong>{{ userAllowedCount }}</strong> / {{ presetCount }} 个预设当前对普通用户可见。
-              </p>
-              <a-button type="primary" @click="openCreate">
-                <template #icon><IconPlus /></template>
-                {{ newPresetLabel }}
-              </a-button>
+      <!-- Users -->
+      <TabsContent value="users" class="flex flex-col gap-4 mt-4">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
+          <p class="text-sm text-muted-foreground m-0">
+            共 <strong class="text-foreground">{{ users.length }}</strong> 个账号 ·
+            启用中管理员 <strong class="text-foreground">{{ activeAdminCount }}</strong>
+          </p>
+          <Button @click="openUserCreate">
+            <Plus class="size-4" />
+            {{ t('action.new_user') }}
+          </Button>
+        </div>
+
+        <EmptyState
+          v-if="!users.length && !loading"
+          icon="👥"
+          title="还没有任何用户"
+          description="点击右上角『新建用户』创建第一个普通用户。"
+        />
+
+        <!-- Desktop table -->
+        <div v-else class="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow class="bg-muted/50 hover:bg-muted/50">
+                <TableHead>{{ t('users.username') }}</TableHead>
+                <TableHead class="w-[160px]">{{ t('users.role') }}</TableHead>
+                <TableHead class="w-[100px]">{{ t('users.disabled') }}</TableHead>
+                <TableHead class="w-[180px]">{{ t('userRanges.column') }}</TableHead>
+                <TableHead class="w-[120px] text-right">{{ t('users.actions') }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="u in users" :key="u.id">
+                <TableCell>
+                  <div class="flex items-center gap-3 min-w-0">
+                    <span
+                      class="size-9 rounded-full inline-flex items-center justify-center text-white font-semibold text-sm shrink-0"
+                      :style="{ background: avatarColor(u.username) }"
+                    >
+                      {{ avatarLetter(u.username) }}
+                    </span>
+                    <div class="flex flex-col min-w-0">
+                      <div class="text-sm font-medium text-foreground flex items-center gap-1.5">
+                        <span class="truncate">{{ u.username }}</span>
+                        <Badge v-if="isSelf(u)" variant="default" class="text-[10px] h-4 px-1.5">你</Badge>
+                      </div>
+                      <div class="text-[11px] text-muted-foreground">ID #{{ u.id }}</div>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Select
+                    :model-value="u.role"
+                    :disabled="isSelf(u)"
+                    @update:model-value="(v: string) => changeRole(u, v as Role)"
+                  >
+                    <SelectTrigger class="h-8 w-[130px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="admin">{{ t('users.roleAdmin') }}</SelectItem>
+                      <SelectItem value="user">{{ t('users.roleUser') }}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell>
+                  <Switch
+                    :model-value="!u.disabled"
+                    :disabled="isSelf(u)"
+                    @update:model-value="(v: boolean) => toggleDisabled(u, v)"
+                  />
+                </TableCell>
+                <TableCell>
+                  <Button
+                    v-if="u.role !== 'admin'"
+                    variant="ghost"
+                    size="sm"
+                    class="h-8"
+                    @click="openRangesDrawer(u)"
+                  >
+                    <span v-if="userRangeCounts[u.id]" class="text-foreground">
+                      {{ t('userRanges.colCount', { n: userRangeCounts[u.id] }) }}
+                    </span>
+                    <span v-else class="text-muted-foreground">{{ t('userRanges.colDefault') }}</span>
+                  </Button>
+                  <span v-else class="text-muted-foreground text-sm">—</span>
+                </TableCell>
+                <TableCell class="text-right whitespace-nowrap">
+                  <div class="inline-flex gap-0.5">
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <Button variant="ghost" size="icon" class="size-8" @click="openUserReset(u)">
+                          <Lock class="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{{ t('action.reset_password') }}</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          :disabled="isSelf(u)"
+                          @click="askUserDelete(u)"
+                        >
+                          <Trash2 class="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {{ isSelf(u) ? '不能删除自己' : t('action.delete') }}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+
+        <!-- Mobile cards -->
+        <div v-if="users.length" class="md:hidden flex flex-col gap-2.5">
+          <div
+            v-for="u in users"
+            :key="u.id"
+            class="rounded-md border border-border bg-card p-4 flex flex-col gap-3"
+          >
+            <div class="flex items-center gap-3">
+              <span
+                class="size-10 rounded-full inline-flex items-center justify-center text-white font-semibold text-sm shrink-0"
+                :style="{ background: avatarColor(u.username) }"
+              >
+                {{ avatarLetter(u.username) }}
+              </span>
+              <div class="flex flex-col min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <span class="font-medium text-foreground truncate">{{ u.username }}</span>
+                  <Badge v-if="isSelf(u)" variant="default" class="text-[10px] h-4 px-1.5">你</Badge>
+                </div>
+                <div class="flex items-center gap-1.5 mt-1">
+                  <Badge
+                    v-if="u.role === 'admin'"
+                    variant="default"
+                    class="text-[10px]"
+                  >{{ t('users.roleAdmin') }}</Badge>
+                  <Badge
+                    v-else
+                    variant="muted"
+                    class="text-[10px]"
+                  >{{ t('users.roleUser') }}</Badge>
+                  <Badge
+                    v-if="u.disabled"
+                    variant="destructive"
+                    class="text-[10px]"
+                  >{{ t('users.disabled') }}</Badge>
+                </div>
+              </div>
             </div>
+            <div class="flex gap-1.5 flex-wrap">
+              <Button
+                v-if="u.role !== 'admin'"
+                variant="outline"
+                size="sm"
+                class="flex-1 text-xs"
+                @click="openRangesDrawer(u)"
+              >
+                {{ userRangeCounts[u.id]
+                  ? t('userRanges.colCount', { n: userRangeCounts[u.id] })
+                  : t('userRanges.colDefault') }}
+              </Button>
+              <Button variant="outline" size="sm" class="text-xs" @click="openUserReset(u)">
+                <Lock class="size-3.5" />
+                {{ t('action.reset_password') }}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                :disabled="isSelf(u)"
+                @click="askUserDelete(u)"
+              >
+                <Trash2 class="size-3.5" />
+                {{ t('action.delete') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </TabsContent>
 
-            <EmptyState
-              v-if="!presets.length && !loading"
-              icon="📭"
-              title="还没有预设端口"
-              description="预设可以让首页的用户一键选择常用端口，建议至少配置 SSH / HTTP / HTTPS。"
-            />
+      <!-- Presets -->
+      <TabsContent value="presets" class="flex flex-col gap-4 mt-4">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
+          <p class="text-sm text-muted-foreground m-0">
+            普通用户仅能在勾选了"普通用户可用"的端口上创建规则，
+            <strong class="text-foreground">{{ userAllowedCount }}</strong> / {{ presetCount }} 个预设当前对普通用户可见。
+          </p>
+          <Button @click="openPresetCreate">
+            <Plus class="size-4" />
+            {{ locale === 'zh-CN' ? '新建预设' : 'New preset' }}
+          </Button>
+        </div>
 
-            <a-table
-              v-else-if="!isMobile"
-              :data="presets"
-              :pagination="false"
-              :hoverable="true"
-              :bordered="false"
-              size="medium"
-              row-key="id"
-            >
-              <template #columns>
-                <a-table-column title="名称" :width="220">
-                  <template #cell="{ record }">
-                    <span class="preset-name">
-                      <span class="preset-icon">{{ categorize(record).icon }}</span>
-                      <span>{{ record.name }}</span>
-                    </span>
-                  </template>
-                </a-table-column>
-                <a-table-column title="端口 / 协议" :width="160">
-                  <template #cell="{ record }">
-                    <code class="mono">:{{ record.port }}</code>
-                    <a-tag size="small" :color="record.protocol === 'udp' ? 'purple' : 'arcoblue'" style="margin-left: 6px">
-                      {{ record.protocol.toUpperCase() }}
-                    </a-tag>
-                  </template>
-                </a-table-column>
-                <a-table-column :title="t('settings.userAllowed')" :width="140">
-                  <template #cell="{ record }">
-                    <a-tag :color="record.user_allowed ? 'green' : 'gray'" size="small">
-                      <IconLock v-if="!record.user_allowed" /> {{ record.user_allowed ? '可用' : '仅管理员' }}
-                    </a-tag>
-                  </template>
-                </a-table-column>
-                <a-table-column :title="t('settings.maxDurationSec')" :width="160">
-                  <template #cell="{ record }">
-                    <span :class="record.max_duration_sec ? 'mono' : 'muted'">
-                      {{ fmtDuration(record.max_duration_sec) }}
-                    </span>
-                  </template>
-                </a-table-column>
-                <a-table-column title="排序" :width="80" data-index="sort" align="center" />
-                <a-table-column :title="t('rules.actions')" :width="140" align="right" fixed="right">
-                  <template #cell="{ record }">
-                    <a-space :size="4">
-                      <a-tooltip :content="t('action.edit')">
-                        <a-button size="small" type="text" @click="openEdit(record)">
-                          <template #icon><IconEdit /></template>
-                        </a-button>
-                      </a-tooltip>
-                      <a-tooltip :content="t('action.delete')">
-                        <a-button size="small" type="text" status="danger" @click="removePreset(record)">
-                          <template #icon><IconDelete /></template>
-                        </a-button>
-                      </a-tooltip>
-                    </a-space>
-                  </template>
-                </a-table-column>
-              </template>
-            </a-table>
+        <EmptyState
+          v-if="!presets.length && !loading"
+          icon="📭"
+          title="还没有预设端口"
+          description="预设可以让首页的用户一键选择常用端口，建议至少配置 SSH / HTTP / HTTPS。"
+        />
 
-            <div v-else class="m-list">
-              <div v-for="p in presets" :key="p.id" class="m-card">
-                <div class="m-card-head">
-                  <span class="preset-name">
-                    <span class="preset-icon">{{ categorize(p).icon }}</span>
-                    <strong>{{ p.name }}</strong>
+        <!-- Desktop table -->
+        <div v-else class="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow class="bg-muted/50 hover:bg-muted/50">
+                <TableHead class="w-[220px]">名称</TableHead>
+                <TableHead>端口集 / 协议</TableHead>
+                <TableHead class="w-[140px]">{{ t('settings.userAllowed') }}</TableHead>
+                <TableHead class="w-[160px]">{{ t('settings.maxDurationSec') }}</TableHead>
+                <TableHead class="w-[80px] text-center">排序</TableHead>
+                <TableHead class="w-[100px] text-right">{{ t('rules.actions') }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="p in presets" :key="p.id">
+                <TableCell>
+                  <span class="inline-flex items-center gap-2">
+                    <span class="text-base">{{ categorize(p).icon }}</span>
+                    <span class="font-medium">{{ p.name }}</span>
                   </span>
-                  <span><code class="mono">:{{ p.port }}/{{ p.protocol }}</code></span>
-                </div>
-                <div class="m-grid">
-                  <div class="m-cell"><span class="muted">{{ t('settings.userAllowed') }}</span>
-                    <a-tag :color="p.user_allowed ? 'green' : 'gray'" size="small">{{ p.user_allowed ? '可用' : '仅管理员' }}</a-tag>
+                </TableCell>
+                <TableCell>
+                  <div class="inline-flex items-center gap-2">
+                    <code class="font-mono font-semibold text-sm text-foreground">{{ p.ports || p.port }}</code>
+                    <Badge :variant="protoVariant(p.protocol)" class="text-[10px] px-1.5 py-0">
+                      {{ p.protocol.toUpperCase() }}
+                    </Badge>
                   </div>
-                  <div class="m-cell"><span class="muted">{{ t('settings.maxDurationSec') }}</span>
-                    <span class="mono">{{ fmtDuration(p.max_duration_sec) }}</span>
+                </TableCell>
+                <TableCell>
+                  <Badge v-if="p.user_allowed" variant="success" class="text-[11px]">可用</Badge>
+                  <Badge v-else variant="muted" class="text-[11px] gap-1">
+                    <Lock class="size-3" />
+                    仅管理员
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <span :class="p.max_duration_sec ? 'font-mono text-sm text-foreground' : 'text-muted-foreground'">
+                    {{ fmtDuration(p.max_duration_sec) }}
+                  </span>
+                </TableCell>
+                <TableCell class="text-center text-sm text-muted-foreground">{{ p.sort }}</TableCell>
+                <TableCell class="text-right whitespace-nowrap">
+                  <div class="inline-flex gap-0.5">
+                    <Button variant="ghost" size="icon" class="size-8" @click="openPresetEdit(p)">
+                      <Pencil class="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      @click="confirmPresetTarget = p"
+                    >
+                      <Trash2 class="size-4" />
+                    </Button>
                   </div>
-                </div>
-                <div class="m-actions">
-                  <a-button size="small" @click="openEdit(p)">
-                    <template #icon><IconEdit /></template>
-                    {{ t('action.edit') }}
-                  </a-button>
-                  <a-button size="small" status="danger" @click="removePreset(p)">
-                    <template #icon><IconDelete /></template>
-                    {{ t('action.delete') }}
-                  </a-button>
-                </div>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+
+        <!-- Mobile cards -->
+        <div v-if="presets.length" class="md:hidden flex flex-col gap-2.5">
+          <div
+            v-for="p in presets"
+            :key="p.id"
+            class="rounded-md border border-border bg-card p-4 flex flex-col gap-2.5"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="inline-flex items-center gap-2 min-w-0">
+                <span class="text-base">{{ categorize(p).icon }}</span>
+                <strong class="truncate">{{ p.name }}</strong>
+              </span>
+              <code class="font-mono text-xs text-foreground">{{ p.ports || p.port }}/{{ p.protocol }}</code>
+            </div>
+            <div class="grid grid-cols-2 gap-y-1.5 gap-x-4 text-sm">
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[11px] text-muted-foreground">{{ t('settings.userAllowed') }}</span>
+                <Badge v-if="p.user_allowed" variant="success" class="text-[10px] w-fit">可用</Badge>
+                <Badge v-else variant="muted" class="text-[10px] w-fit">仅管理员</Badge>
               </div>
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[11px] text-muted-foreground">{{ t('settings.maxDurationSec') }}</span>
+                <span :class="p.max_duration_sec ? 'font-mono text-xs' : 'text-xs text-muted-foreground'">
+                  {{ fmtDuration(p.max_duration_sec) }}
+                </span>
+              </div>
+            </div>
+            <div class="flex gap-1.5">
+              <Button variant="outline" size="sm" class="flex-1 text-xs" @click="openPresetEdit(p)">
+                <Pencil class="size-3.5" />
+                {{ t('action.edit') }}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="flex-1 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                @click="confirmPresetTarget = p"
+              >
+                <Trash2 class="size-3.5" />
+                {{ t('action.delete') }}
+              </Button>
             </div>
           </div>
-        </a-tab-pane>
+        </div>
+      </TabsContent>
 
-        <a-tab-pane key="defaults">
-          <template #title>
-            <span class="tab-title">⚙️ {{ t('settings.tabDefaults') }}</span>
-          </template>
-          <div class="tab-body">
-            <a-alert type="info" closable>
-              这些参数由启动时的环境变量决定（PORTPASS_* 系列），需修改请编辑容器配置后重启。
-            </a-alert>
-            <div class="kv-grid" v-if="settings">
-              <div class="kv">
-                <span class="kv-k">PORTPASS_FIREWALL_DRIVER</span>
-                <code class="kv-v">{{ settings.firewall_driver }}</code>
-              </div>
-              <div class="kv">
-                <span class="kv-k">PORTPASS_MAX_DURATION_HOURS</span>
-                <code class="kv-v">{{ settings.max_duration_hours }}</code>
-              </div>
-              <div class="kv">
-                <span class="kv-k">PORTPASS_HISTORY_RETENTION_DAYS</span>
-                <code class="kv-v">{{ settings.history_retention_days }}</code>
-              </div>
-              <div class="kv">
-                <span class="kv-k">PORTPASS_AUTH_MODE</span>
-                <code class="kv-v">{{ settings.auth_mode }}</code>
-              </div>
+      <!-- Protected ports -->
+      <TabsContent value="protected" class="flex flex-col gap-4 mt-4">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
+          <p class="text-sm text-muted-foreground m-0">
+            用于保护本机已被业务占用的端口；任何账户（含管理员）都不能临时开放。
+          </p>
+          <Button @click="openProtectedCreate">
+            <Plus class="size-4" />
+            {{ t('protected.new') }}
+          </Button>
+        </div>
+
+        <EmptyState
+          v-if="!protectedPorts.length && !loading"
+          icon="🛡️"
+          :title="t('protected.empty')"
+          :description="t('protected.subtitle')"
+        />
+
+        <!-- Desktop table -->
+        <div v-else class="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow class="bg-muted/50 hover:bg-muted/50">
+                <TableHead class="w-[220px]">{{ t('protected.name') }}</TableHead>
+                <TableHead>{{ t('protected.ports') }}</TableHead>
+                <TableHead>{{ t('protected.note') }}</TableHead>
+                <TableHead class="w-[100px] text-right">{{ t('rules.actions') }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="p in protectedPorts" :key="p.id">
+                <TableCell class="font-medium">{{ p.name }}</TableCell>
+                <TableCell>
+                  <div class="inline-flex items-center gap-2">
+                    <code class="font-mono font-semibold text-sm">{{ p.ports }}</code>
+                    <Badge :variant="protoVariant(p.protocol)" class="text-[10px] px-1.5 py-0">
+                      {{ p.protocol.toUpperCase() }}
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell class="max-w-0">
+                  <Tooltip v-if="p.note">
+                    <TooltipTrigger as-child>
+                      <span class="block truncate text-sm text-muted-foreground">{{ p.note }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent class="max-w-xs whitespace-pre-wrap">{{ p.note }}</TooltipContent>
+                  </Tooltip>
+                  <span v-else class="text-muted-foreground text-sm">—</span>
+                </TableCell>
+                <TableCell class="text-right whitespace-nowrap">
+                  <div class="inline-flex gap-0.5">
+                    <Button variant="ghost" size="icon" class="size-8" @click="openProtectedEdit(p)">
+                      <Pencil class="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      @click="confirmProtectedTarget = p"
+                    >
+                      <Trash2 class="size-4" />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+
+        <!-- Mobile cards -->
+        <div v-if="protectedPorts.length" class="md:hidden flex flex-col gap-2.5">
+          <div
+            v-for="p in protectedPorts"
+            :key="p.id"
+            class="rounded-md border border-border bg-card p-4 flex flex-col gap-2.5"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <strong class="truncate">{{ p.name }}</strong>
+              <code class="font-mono text-xs">{{ p.ports }}/{{ p.protocol }}</code>
+            </div>
+            <div v-if="p.note" class="text-xs text-muted-foreground">{{ p.note }}</div>
+            <div class="flex gap-1.5">
+              <Button variant="outline" size="sm" class="flex-1 text-xs" @click="openProtectedEdit(p)">
+                <Pencil class="size-3.5" />
+                {{ t('action.edit') }}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="flex-1 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                @click="confirmProtectedTarget = p"
+              >
+                <Trash2 class="size-3.5" />
+                {{ t('action.delete') }}
+              </Button>
             </div>
           </div>
-        </a-tab-pane>
+        </div>
+      </TabsContent>
 
-        <a-tab-pane key="proxies">
-          <template #title>
-            <span class="tab-title">🌐 {{ t('settings.tabProxies') }}
-              <a-tag size="small">{{ settings?.trusted_proxies?.length ?? 0 }}</a-tag>
-            </span>
-          </template>
-          <div class="tab-body">
-            <a-alert type="warning" closable>
-              客户端真实 IP 通过 <code>X-Forwarded-For</code> 解析。仅当请求来自这些 CIDR 时，PortPass 才会信任 XFF 头部。
-            </a-alert>
-            <div v-if="settings?.trusted_proxies?.length" class="proxy-list">
-              <a-tag v-for="p in settings.trusted_proxies" :key="p" size="medium" color="arcoblue">
-                {{ p }}
-              </a-tag>
+      <!-- Runtime -->
+      <TabsContent value="runtime" class="flex flex-col gap-4 mt-4">
+        <Alert variant="info">
+          <AlertDescription>
+            这些参数由启动时的环境变量决定（PORTPASS_* 系列）。如需修改请编辑容器配置后重启。
+          </AlertDescription>
+        </Alert>
+
+        <div class="flex flex-col gap-5">
+          <section class="flex flex-col gap-2">
+            <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {{ t('settings.sectionBasics') }}
+            </h4>
+            <div v-if="settings" class="flex flex-col gap-1.5">
+              <div
+                v-for="k in runtimeKeys"
+                :key="k"
+                class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
+              >
+                <code class="font-mono text-xs text-foreground/90">{{ k }}</code>
+                <span class="text-xs text-muted-foreground">
+                  {{ envHint(k, locale as 'zh-CN' | 'en-US') }}
+                </span>
+                <code class="font-mono text-sm font-semibold text-primary md:text-right break-all">
+                  {{ settingValue(k) }}
+                </code>
+              </div>
             </div>
-            <EmptyState
-              v-else
-              icon="🛡️"
-              title="未配置可信反代"
-              description="如需识别 NAT 后的真实客户端 IP，请通过 PORTPASS_TRUSTED_PROXIES 环境变量配置。"
+          </section>
+
+          <section class="flex flex-col gap-2">
+            <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {{ t('settings.sectionProxies') }}
+            </h4>
+            <div
+              class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
+            >
+              <code class="font-mono text-xs text-foreground/90">PORTPASS_TRUSTED_PROXIES</code>
+              <span class="text-xs text-muted-foreground">
+                {{ envHint('PORTPASS_TRUSTED_PROXIES', locale as 'zh-CN' | 'en-US') }}
+              </span>
+              <div class="md:text-right flex flex-wrap gap-1 md:justify-end">
+                <Badge
+                  v-for="p in settings?.trusted_proxies || []"
+                  :key="p"
+                  variant="default"
+                  class="text-[10px] font-mono"
+                >{{ p }}</Badge>
+                <span v-if="!settings?.trusted_proxies?.length" class="text-muted-foreground text-xs">未配置</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="flex flex-col gap-2">
+            <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {{ t('settings.sectionAuth') }}
+            </h4>
+            <div v-if="settings" class="flex flex-col gap-1.5">
+              <div
+                class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
+              >
+                <code class="font-mono text-xs text-foreground/90">PORTPASS_AUTH_MODE</code>
+                <span class="text-xs text-muted-foreground">
+                  {{ envHint('PORTPASS_AUTH_MODE', locale as 'zh-CN' | 'en-US') }}
+                </span>
+                <code class="font-mono text-sm font-semibold text-primary md:text-right">{{ settings.auth_mode }}</code>
+              </div>
+              <div
+                class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
+              >
+                <code class="font-mono text-xs text-foreground/90">PORTPASS_ADMIN_USERNAME</code>
+                <span class="text-xs text-muted-foreground">
+                  {{ envHint('PORTPASS_ADMIN_USERNAME', locale as 'zh-CN' | 'en-US') }}
+                </span>
+                <code class="font-mono text-sm font-semibold text-primary md:text-right">
+                  {{ settingValue('PORTPASS_ADMIN_USERNAME') }}
+                </code>
+              </div>
+            </div>
+            <div v-if="settings" class="text-sm text-muted-foreground leading-relaxed px-1">
+              <p v-if="settings.auth_mode === 'password'" class="m-0">
+                用户名 + 密码登录，签发 JWT。所有账号信息持久化在 SQLite。
+              </p>
+              <p v-else-if="settings.auth_mode === 'ipwhitelist'" class="m-0">
+                仅根据来源 IP 是否在白名单内放行，UI 跳过登录步骤。
+              </p>
+              <p v-else class="m-0">
+                关闭鉴权，任何人都可以访问。<strong class="text-foreground">仅适合内网或开发环境。</strong>
+              </p>
+            </div>
+          </section>
+        </div>
+      </TabsContent>
+    </Tabs>
+
+    <!-- Preset modal -->
+    <Dialog v-model:open="presetEditVisible">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {{ isEditingPreset
+              ? (locale === 'zh-CN' ? '编辑预设' : 'Edit preset')
+              : (locale === 'zh-CN' ? '新建预设' : 'New preset') }}
+          </DialogTitle>
+        </DialogHeader>
+        <div class="flex flex-col gap-4">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="col-span-2 flex flex-col gap-1.5">
+              <Label>名称</Label>
+              <Input v-model="presetEditing.name" placeholder="例如 SSH" />
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <Label>排序</Label>
+              <Input
+                v-model="presetEditing.sort"
+                type="number"
+                :min="0"
+                :max="999"
+              />
+            </div>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>端口集</Label>
+            <PortSetInput
+              v-model="presetEditing.ports as string"
+              :placeholder="t('portSet.placeholder')"
+              @validation="(ok: boolean, error: string | null) => (presetPortsValid = { ok, error })"
             />
           </div>
-        </a-tab-pane>
-
-        <a-tab-pane key="auth">
-          <template #title>
-            <span class="tab-title">🔑 {{ t('settings.tabAuth') }}</span>
-          </template>
-          <div class="tab-body">
-            <div v-if="settings" class="auth-current">
-              <div class="auth-mode">
-                <span class="muted">当前鉴权模式</span>
-                <a-tag color="arcoblue" size="medium" style="font-size: 14px">{{ settings.auth_mode }}</a-tag>
-              </div>
-              <div class="auth-explain">
-                <p v-if="settings.auth_mode === 'password'">用户名 + 密码登录，签发 JWT Token。所有账号信息持久化在 SQLite。</p>
-                <p v-else-if="settings.auth_mode === 'ipwhitelist'">仅根据来源 IP 是否在白名单内放行，UI 跳过登录步骤。</p>
-                <p v-else>关闭鉴权，任何人都可以访问。<strong>仅适合内网或开发环境使用。</strong></p>
-              </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>协议</Label>
+            <div class="inline-flex p-1 rounded-md bg-muted/60 border border-border w-fit">
+              <button
+                v-for="p in protocolOptions"
+                :key="p"
+                type="button"
+                class="px-3 h-8 rounded text-xs font-medium transition-colors"
+                :class="presetEditing.protocol === p
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'"
+                @click="presetEditing.protocol = p"
+              >
+                {{ p === 'both' ? 'TCP+UDP' : p.toUpperCase() }}
+              </button>
             </div>
           </div>
-        </a-tab-pane>
-      </a-tabs>
-    </a-card>
+          <div class="flex items-center justify-between rounded-md bg-muted/40 p-3">
+            <div class="flex flex-col gap-0.5">
+              <Label class="cursor-pointer">{{ t('settings.userAllowed') }}</Label>
+              <span class="text-xs text-muted-foreground">{{ t('settings.userAllowedHelp') }}</span>
+            </div>
+            <Switch v-model="presetEditing.user_allowed" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('settings.maxDurationSec') }}</Label>
+            <Input
+              v-model="presetEditing.max_duration_sec"
+              type="number"
+              :min="0"
+              :max="24 * 3600"
+              :step="300"
+            />
+            <span class="text-xs text-muted-foreground">{{ t('settings.maxDurationSecHelp') }}</span>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="presetEditVisible = false">{{ t('common.cancel') }}</Button>
+          <Button @click="savePreset">{{ t('common.save') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
-    <a-modal
-      v-model:visible="editVisible"
-      :title="isEditingExisting ? editPresetLabel : newPresetLabel"
-      :on-before-ok="saveEdit"
-      unmount-on-close
-    >
-      <a-form :model="editing" layout="vertical">
-        <div class="form-row">
-          <a-form-item label="名称" class="grow">
-            <a-input v-model="editing.name" placeholder="例如 SSH" />
-          </a-form-item>
-          <a-form-item label="排序优先级">
-            <a-input-number v-model="editing.sort" :min="0" :max="999" hide-button class="num-w" />
-          </a-form-item>
+    <!-- Protected modal -->
+    <Dialog v-model:open="protectedEditVisible">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {{ protectedEditing.id ? t('protected.edit') : t('protected.new') }}
+          </DialogTitle>
+        </DialogHeader>
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('protected.name') }}</Label>
+            <Input v-model="protectedEditing.name" placeholder="App backend" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('protected.ports') }}</Label>
+            <PortSetInput
+              v-model="protectedEditing.ports as string"
+              :placeholder="t('portSet.placeholder')"
+              @validation="(ok: boolean, error: string | null) => (protectedPortsValid = { ok, error })"
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('protected.protocol') }}</Label>
+            <div class="inline-flex p-1 rounded-md bg-muted/60 border border-border w-fit">
+              <button
+                v-for="p in protocolOptions"
+                :key="p"
+                type="button"
+                class="px-3 h-8 rounded text-xs font-medium transition-colors"
+                :class="protectedEditing.protocol === p
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'"
+                @click="protectedEditing.protocol = p"
+              >
+                {{ p === 'both' ? 'TCP+UDP' : p.toUpperCase() }}
+              </button>
+            </div>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('protected.note') }}</Label>
+            <Input v-model="protectedEditing.note" placeholder="Optional" />
+          </div>
         </div>
-        <div class="form-row">
-          <a-form-item label="端口" class="grow">
-            <a-input-number v-model="editing.port" :min="1" :max="65535" hide-button placeholder="1-65535" />
-          </a-form-item>
-          <a-form-item label="协议">
-            <a-radio-group v-model="editing.protocol" type="button">
-              <a-radio value="tcp">TCP</a-radio>
-              <a-radio value="udp">UDP</a-radio>
-              <a-radio value="both">TCP+UDP</a-radio>
-            </a-radio-group>
-          </a-form-item>
+        <DialogFooter>
+          <Button variant="outline" @click="protectedEditVisible = false">{{ t('common.cancel') }}</Button>
+          <Button @click="saveProtected">{{ t('common.save') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- User create modal -->
+    <Dialog v-model:open="userCreateModal">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('users.newUser') }}</DialogTitle>
+        </DialogHeader>
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('users.username') }}</Label>
+            <Input v-model="userCreateForm.username" autocomplete="off" placeholder="例如 alice" />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('password.new') }}</Label>
+            <Input v-model="userCreateForm.password" type="password" autocomplete="new-password" />
+            <div v-if="userCreateForm.password" class="flex items-center gap-2 mt-1">
+              <div class="flex gap-1 flex-1">
+                <span
+                  v-for="i in 5"
+                  :key="i"
+                  class="flex-1 h-1 rounded-full"
+                  :class="i <= createStrength.score
+                    ? createStrength.score <= 2 ? 'bg-red-500' : createStrength.score === 3 ? 'bg-amber-500' : createStrength.score === 4 ? 'bg-yellow-400' : 'bg-emerald-500'
+                    : 'bg-muted'"
+                />
+              </div>
+              <span class="text-xs text-muted-foreground w-8 text-right">{{ createStrength.label }}</span>
+            </div>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('users.role') }}</Label>
+            <div class="inline-flex p-1 rounded-md bg-muted/60 border border-border w-fit">
+              <button
+                type="button"
+                class="px-3 h-8 rounded text-xs font-medium transition-colors"
+                :class="userCreateForm.role === 'user'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'"
+                @click="userCreateForm.role = 'user'"
+              >
+                {{ t('users.roleUser') }}
+              </button>
+              <button
+                type="button"
+                class="px-3 h-8 rounded text-xs font-medium transition-colors"
+                :class="userCreateForm.role === 'admin'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'"
+                @click="userCreateForm.role = 'admin'"
+              >
+                {{ t('users.roleAdmin') }}
+              </button>
+            </div>
+          </div>
         </div>
-        <a-divider style="margin: 8px 0" />
-        <a-form-item :label="t('settings.userAllowed')" :help="t('settings.userAllowedHelp')">
-          <a-switch v-model="editing.user_allowed" />
-        </a-form-item>
-        <a-form-item :label="t('settings.maxDurationSec')" :help="t('settings.maxDurationSecHelp')">
-          <a-input-number v-model="editing.max_duration_sec" :min="0" :max="24 * 3600" :step="300" hide-button class="num-w" />
-        </a-form-item>
-      </a-form>
-    </a-modal>
+        <DialogFooter>
+          <Button variant="outline" @click="userCreateModal = false">{{ t('common.cancel') }}</Button>
+          <Button :disabled="userCreateSubmitting" @click="submitUserCreate">
+            {{ t('common.confirm') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- User reset password -->
+    <Dialog v-model:open="userResetModal">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {{ t('users.resetPwd') }}
+            <span v-if="userResetTarget" class="text-muted-foreground font-normal">
+              · {{ userResetTarget.username }}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('password.new') }}</Label>
+            <Input v-model="userResetForm.new_password" type="password" autocomplete="new-password" />
+            <div v-if="userResetForm.new_password" class="flex items-center gap-2 mt-1">
+              <div class="flex gap-1 flex-1">
+                <span
+                  v-for="i in 5"
+                  :key="i"
+                  class="flex-1 h-1 rounded-full"
+                  :class="i <= resetStrength.score
+                    ? resetStrength.score <= 2 ? 'bg-red-500' : resetStrength.score === 3 ? 'bg-amber-500' : resetStrength.score === 4 ? 'bg-yellow-400' : 'bg-emerald-500'
+                    : 'bg-muted'"
+                />
+              </div>
+              <span class="text-xs text-muted-foreground w-8 text-right">{{ resetStrength.label }}</span>
+            </div>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('password.confirm') }}</Label>
+            <Input v-model="userResetForm.confirm" type="password" autocomplete="new-password" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="userResetModal = false">{{ t('common.cancel') }}</Button>
+          <Button :disabled="userResetSubmitting" @click="submitUserReset">
+            {{ t('common.confirm') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Preset delete confirm -->
+    <Dialog :open="!!confirmPresetTarget" @update:open="(v: boolean) => !v && (confirmPresetTarget = null)">
+      <DialogContent class="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>
+            {{ t('action.delete') }}
+            <span v-if="confirmPresetTarget" class="text-muted-foreground font-normal">
+              · {{ confirmPresetTarget.name }}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+        <div v-if="confirmPresetTarget" class="text-sm text-muted-foreground">
+          {{ confirmPresetTarget.ports || confirmPresetTarget.port }}/{{ confirmPresetTarget.protocol }}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="confirmPresetTarget = null">{{ t('common.cancel') }}</Button>
+          <Button variant="destructive" @click="doRemovePreset">{{ t('action.delete') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Protected delete confirm -->
+    <Dialog :open="!!confirmProtectedTarget" @update:open="(v: boolean) => !v && (confirmProtectedTarget = null)">
+      <DialogContent class="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>
+            {{ t('action.delete') }}
+            <span v-if="confirmProtectedTarget" class="text-muted-foreground font-normal">
+              · {{ confirmProtectedTarget.name }}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+        <div v-if="confirmProtectedTarget" class="text-sm text-muted-foreground">
+          {{ confirmProtectedTarget.ports }}/{{ confirmProtectedTarget.protocol }}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="confirmProtectedTarget = null">{{ t('common.cancel') }}</Button>
+          <Button variant="destructive" @click="doRemoveProtected">{{ t('action.delete') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- User delete confirm -->
+    <Dialog :open="!!confirmUserTarget" @update:open="(v: boolean) => !v && (confirmUserTarget = null)">
+      <DialogContent class="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{{ t('action.delete') }}</DialogTitle>
+        </DialogHeader>
+        <div class="text-sm text-muted-foreground">
+          {{ t('users.deleteConfirm') }}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" @click="confirmUserTarget = null">{{ t('common.cancel') }}</Button>
+          <Button variant="destructive" @click="doUserDelete">{{ t('action.delete') }}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <UserRangesDrawer
+      v-model:visible="rangesDrawer"
+      :user="rangesDrawerUser"
+      @changed="refreshRangeCounts"
+    />
   </div>
 </template>
-
-<style scoped>
-.settings-wrap { display: flex; flex-direction: column; gap: 16px; }
-.pp-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.pp-page-title { margin: 0; font-size: 20px; font-weight: 600; color: var(--color-text-1); }
-.pp-page-sub { margin: 4px 0 0; color: var(--color-text-3); font-size: 13px; }
-.pp-head-actions { display: flex; gap: 8px; }
-
-.overview {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-}
-.ov-card {
-  background: var(--pp-surface);
-  border-radius: 12px;
-  padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  box-shadow: var(--pp-shadow-1);
-}
-.ov-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex: 0 0 40px;
-}
-.ov-label { font-size: 12px; color: var(--color-text-3); }
-.ov-value { font-size: 16px; font-weight: 600; color: var(--color-text-1); margin-top: 2px; }
-
-.settings-card { border-radius: 14px; }
-.settings-card :deep(.arco-card-body) { padding: 0; }
-.settings-card :deep(.arco-tabs-nav) { padding: 0 20px; border-bottom: 1px solid var(--pp-border); }
-.tab-title { display: inline-flex; align-items: center; gap: 6px; }
-.tab-body { padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 16px; }
-.tab-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.tab-help { margin: 0; color: var(--color-text-2); font-size: 13px; flex: 1; }
-
-.preset-name { display: inline-flex; align-items: center; gap: 8px; }
-.preset-icon { font-size: 16px; }
-.muted { color: var(--color-text-3); }
-.mono { font-family: ui-monospace, SFMono-Regular, monospace; font-weight: 500; color: var(--color-text-1); }
-
-.kv-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 8px;
-}
-.kv {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 14px;
-  background: var(--pp-surface-soft);
-  border-radius: 8px;
-}
-.kv-k { font-family: ui-monospace, monospace; font-size: 12px; color: var(--color-text-2); }
-.kv-v { font-family: ui-monospace, monospace; font-weight: 600; color: var(--pp-brand-6); }
-
-.proxy-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.auth-current { display: flex; flex-direction: column; gap: 12px; }
-.auth-mode { display: flex; align-items: center; gap: 10px; }
-.auth-explain { color: var(--color-text-2); line-height: 1.7; font-size: 13px; }
-
-.form-row { display: flex; gap: 12px; }
-.form-row .grow { flex: 1; }
-.num-w :deep(.arco-input-number) { width: 100%; }
-
-.m-list { display: flex; flex-direction: column; gap: 10px; }
-.m-card {
-  background: var(--pp-surface);
-  border: 1px solid var(--pp-border);
-  border-radius: 12px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.m-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-.m-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.m-cell { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.m-cell .muted { font-size: 11px; }
-.m-actions { display: flex; gap: 6px; }
-.m-actions :deep(.arco-btn) { flex: 1; }
-
-@media (max-width: 768px) {
-  .form-row { flex-direction: column; gap: 0; }
-  .tab-body { padding: 16px; }
-  .settings-card :deep(.arco-tabs-nav) { padding: 0 8px; }
-}
-</style>

@@ -16,34 +16,87 @@ import (
 	"github.com/teacat99/PortPass/internal/lifecycle"
 	"github.com/teacat99/PortPass/internal/model"
 	"github.com/teacat99/PortPass/internal/netutil"
+	"github.com/teacat99/PortPass/internal/portset"
 	"github.com/teacat99/PortPass/internal/store"
 )
 
-// ensurePortPolicy enforces the non-admin user port policy: the requested
-// (port, protocol) must match a PresetPort with UserAllowed=true, and the
-// requested duration must fit within the preset's MaxDurationSec (0 means
-// inherit the global cap only). Admins bypass this check.
-// Returns (matchedPreset, nil) on success; the caller is expected to abort
-// with the returned error code when non-nil.
-func (s *Server) ensurePortPolicy(c *gin.Context, port int, proto string, durationSec int) (*model.PresetPort, bool) {
-	_, _, role := auth.Principal(c)
-	if role == model.RoleAdmin {
-		return nil, true
+// ensurePortPolicy enforces the full policy chain for a rule request:
+//  1. The requested port group must not overlap any ProtectedPort for
+//     ANY caller (admin included) - operator-declared "hands-off" ports.
+//  2. Admins are otherwise unrestricted.
+//  3. Non-admins with at least one UserAllowedRange row use that list
+//     as their exclusive override (covering preset.user_allowed).
+//  4. Non-admins with no personal policy fall back to the global
+//     preset.user_allowed whitelist.
+//  5. Whichever slot matched, duration_sec must not exceed its
+//     MaxDurationSec when that cap is non-zero.
+//
+// On success returns (maxDurationSec, true) where a zero means "no
+// explicit cap"; on failure writes the HTTP response and returns false.
+func (s *Server) ensurePortPolicy(c *gin.Context, ps portset.Set, proto string, durationSec int) (int, bool) {
+	if ps.Empty() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no ports on request"})
+		return 0, false
 	}
-	preset, err := s.store.FindPresetForUser(port, proto)
+	// (1) Protected check applies to everyone, admin included.
+	prot, err := s.store.FindProtectedOverlap(ps, proto)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return nil, false
+		return 0, false
 	}
-	if preset == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "port not allowed for non-admin user"})
-		return nil, false
+	if prot != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("port(s) %s are protected (%s)", prot.Ports, prot.Name)})
+		return 0, false
 	}
-	if preset.MaxDurationSec > 0 && durationSec > preset.MaxDurationSec {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("duration exceeds allowed for this port (max %ds)", preset.MaxDurationSec)})
-		return nil, false
+
+	uid, _, role := auth.Principal(c)
+	if role == model.RoleAdmin {
+		return 0, true
 	}
-	return preset, true
+
+	hasPersonal, err := s.store.HasPersonalRanges(uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return 0, false
+	}
+	var cap int
+	if hasPersonal {
+		match, err := s.store.FindUserAllowedForRequest(uid, ps, proto)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return 0, false
+		}
+		if match == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "ports not in your allowed ranges"})
+			return 0, false
+		}
+		cap = match.MaxDurationSec
+	} else {
+		matches, err := s.store.FindPresetsForPortSet(ps, proto)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return 0, false
+		}
+		if len(matches) == 0 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "port not allowed for non-admin user"})
+			return 0, false
+		}
+		// Pick the MOST RESTRICTIVE non-zero MaxDurationSec as the cap;
+		// if none set a cap, leave it at zero.
+		for _, p := range matches {
+			if p.MaxDurationSec <= 0 {
+				continue
+			}
+			if cap == 0 || p.MaxDurationSec < cap {
+				cap = p.MaxDurationSec
+			}
+		}
+	}
+	if cap > 0 && durationSec > cap {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("duration exceeds allowed for this port (max %ds)", cap)})
+		return 0, false
+	}
+	return cap, true
 }
 
 // Server wires the HTTP router with its dependencies. Constructing Server
@@ -98,10 +151,18 @@ func (s *Server) Router(engine *gin.Engine) {
 	g.GET("/history", s.handleHistory)
 
 	// Preset list is readable by every user (non-admin sees only the
-	// user-allowed subset). Mutations are admin-only.
+	// user-allowed subset, further filtered by personal policy). Mutations
+	// are admin-only.
 	g.GET("/preset-ports", s.handleListPresets)
 	g.POST("/preset-ports", s.handleUpsertPreset)
 	g.DELETE("/preset-ports/:id", s.handleDeletePreset)
+
+	// Protected ports — admin-only list + CRUD; used by the policy
+	// chain to block anyone (admin included) from opening sensitive
+	// business ports by accident.
+	g.GET("/protected-ports", s.handleListProtected)
+	g.POST("/protected-ports", s.handleUpsertProtected)
+	g.DELETE("/protected-ports/:id", s.handleDeleteProtected)
 
 	// User management endpoints (admin-only is enforced inside the
 	// handler via ensureAdmin so the auth layer can keep a single gate).
@@ -110,6 +171,14 @@ func (s *Server) Router(engine *gin.Engine) {
 	g.PUT("/users/:id", s.handleUpdateUser)
 	g.POST("/users/:id/password", s.handleResetUserPassword)
 	g.DELETE("/users/:id", s.handleDeleteUser)
+
+	// Per-user allowed port ranges — admin-only list/create/delete.
+	// Adding any row switches the user from preset-whitelist fallback
+	// to personal-range override.
+	g.GET("/users/:id/port-ranges", s.handleListUserRanges)
+	g.POST("/users/:id/port-ranges", s.handleUpsertUserRange)
+	g.DELETE("/users/:id/port-ranges/:rid", s.handleDeleteUserRange)
+	g.DELETE("/users/:id/port-ranges", s.handleClearUserRanges)
 
 	g.GET("/settings", s.handleGetSettings)
 	g.PUT("/settings", s.handlePutSettings)
@@ -132,13 +201,16 @@ func (s *Server) handleClientIP(c *gin.Context) {
 }
 
 type createRuleReq struct {
-	SourceIP       string `json:"source_ip"`
-	UseClientIP    bool   `json:"use_client_ip"`
-	Port           int    `json:"port" binding:"required"`
-	Protocol       string `json:"protocol"`
-	DurationSec    int    `json:"duration_sec"`
-	ExpireAt       string `json:"expire_at"`
-	Note           string `json:"note"`
+	SourceIP    string `json:"source_ip"`
+	UseClientIP bool   `json:"use_client_ip"`
+	// Port stays for backwards-compatibility with older API clients that
+	// didn't know about port groups. New clients should supply Ports.
+	Port        int    `json:"port"`
+	Ports       string `json:"ports"`
+	Protocol    string `json:"protocol"`
+	DurationSec int    `json:"duration_sec"`
+	ExpireAt    string `json:"expire_at"`
+	Note        string `json:"note"`
 }
 
 // handleCreateRule creates, persists and schedules a new firewall rule. It
@@ -168,8 +240,9 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Port < 1 || req.Port > 65535 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "port out of range"})
+	ps, err := resolvePortSet(req.Ports, req.Port)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -181,13 +254,12 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 
 	uid, username, _ := auth.Principal(c)
 
-	// Port policy: non-admin users must hit a user-allowed preset and
-	// respect its MaxDurationSec. Admins skip this entirely.
+	// Port policy: Protected + personal range (if any) or preset.user_allowed.
 	durationForPolicy := req.DurationSec
 	if durationForPolicy == 0 {
 		durationForPolicy = int(time.Until(expireAt).Seconds())
 	}
-	if _, ok := s.ensurePortPolicy(c, req.Port, proto, durationForPolicy); !ok {
+	if _, ok := s.ensurePortPolicy(c, ps, proto, durationForPolicy); !ok {
 		return
 	}
 
@@ -204,7 +276,8 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 	rule := &model.Rule{
 		UserID:    uid,
 		SourceIP:  source,
-		Port:      req.Port,
+		Port:      ps.First(),
+		Ports:     ps.String(),
 		Protocol:  proto,
 		Note:      req.Note,
 		Status:    model.StatusPending,
@@ -223,7 +296,7 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 	}
 	_ = s.store.WriteAudit(&model.AuditLog{
 		Action: "create", RuleID: rule.ID, Actor: username, ActorIP: clientIP,
-		Detail: fmt.Sprintf("%s %d/%s until %s", source, req.Port, proto, expireAt.Format(time.RFC3339)),
+		Detail: fmt.Sprintf("%s %s/%s until %s", source, rule.Ports, proto, expireAt.Format(time.RFC3339)),
 	})
 	c.JSON(http.StatusOK, rule)
 }
@@ -354,7 +427,8 @@ func (s *Server) handleExtendRule(c *gin.Context) {
 	}
 	// Port policy: extending must still fit the preset cap for regular users.
 	remaining := int(time.Until(newExpire).Seconds())
-	if _, ok := s.ensurePortPolicy(c, r.Port, r.Protocol, remaining); !ok {
+	rps := rulePorts(r)
+	if _, ok := s.ensurePortPolicy(c, rps, r.Protocol, remaining); !ok {
 		return
 	}
 	if err := s.lifecycle.Extend(r, newExpire); err != nil {
@@ -397,11 +471,13 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 	}
 	uid, username, _ := auth.Principal(c)
 	durationForPolicy := int(time.Until(expireAt).Seconds())
-	if _, ok := s.ensurePortPolicy(c, src.Port, src.Protocol, durationForPolicy); !ok {
+	rps := rulePorts(src)
+	if _, ok := s.ensurePortPolicy(c, rps, src.Protocol, durationForPolicy); !ok {
 		return
 	}
 	dup := &model.Rule{
-		UserID: uid, SourceIP: src.SourceIP, Port: src.Port, Protocol: src.Protocol, Note: src.Note,
+		UserID: uid, SourceIP: src.SourceIP, Port: src.Port, Ports: src.Ports,
+		Protocol: src.Protocol, Note: src.Note,
 		Status: model.StatusPending, ExpireAt: expireAt, CreatedBy: username,
 		CreatedIP: clientIP, CreatedAt: time.Now(),
 	}
@@ -451,21 +527,59 @@ func (s *Server) handleHistory(c *gin.Context) {
 }
 
 func (s *Server) handleListPresets(c *gin.Context) {
-	_, _, role := auth.Principal(c)
-	var (
-		ps  []model.PresetPort
-		err error
-	)
+	uid, _, role := auth.Principal(c)
 	if role == model.RoleAdmin {
-		ps, err = s.store.ListPresetPorts()
-	} else {
-		ps, err = s.store.ListUserAllowedPresets()
+		ps, err := s.store.ListPresetPorts()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, ps)
+		return
 	}
+	// Non-admin: start from user-allowed presets. When the user has a
+	// personal range policy, further filter to presets fully covered
+	// by at least one of their ranges — the "override" semantics.
+	ps, err := s.store.ListUserAllowedPresets()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, ps)
+	hasPersonal, err := s.store.HasPersonalRanges(uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !hasPersonal {
+		c.JSON(http.StatusOK, ps)
+		return
+	}
+	ranges, err := s.store.ListUserAllowedRanges(uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	filtered := make([]model.PresetPort, 0, len(ps))
+	for _, p := range ps {
+		pset, err := portset.Parse(p.Ports)
+		if err != nil || pset.Empty() {
+			continue
+		}
+		for _, r := range ranges {
+			rset, err := portset.Parse(r.Ports)
+			if err != nil || rset.Empty() {
+				continue
+			}
+			// Match when protocols are compatible AND the user range
+			// is a superset of the preset's port group.
+			if (r.Protocol == p.Protocol || r.Protocol == model.ProtoBoth || p.Protocol == model.ProtoBoth) &&
+				rset.ContainsSet(pset) {
+				filtered = append(filtered, p)
+				break
+			}
+		}
+	}
+	c.JSON(http.StatusOK, filtered)
 }
 
 func (s *Server) handleUpsertPreset(c *gin.Context) {
@@ -477,8 +591,9 @@ func (s *Server) handleUpsertPreset(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if p.Port < 1 || p.Port > 65535 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "port out of range"})
+	ps, err := resolvePortSet(p.Ports, p.Port)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	if _, err := normaliseProtocol(p.Protocol); err != nil {
@@ -489,6 +604,18 @@ func (s *Server) handleUpsertPreset(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "max_duration_sec must be >= 0"})
 		return
 	}
+	// Reverse-intersection check: a preset cannot cover any port that
+	// is registered as protected. Surfaces the conflict early so the
+	// admin edits one list at a time.
+	if clash, err := s.store.FindProtectedOverlap(ps, p.Protocol); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	} else if clash != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("preset overlaps protected port %q (%s)", clash.Name, clash.Ports)})
+		return
+	}
+	p.Ports = ps.String()
+	p.Port = ps.First()
 	if err := s.store.UpsertPresetPort(&p); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -641,4 +768,39 @@ func stringifyNets(nets []*net.IPNet) []string {
 		out = append(out, n.String())
 	}
 	return out
+}
+
+// resolvePortSet normalises the (ports, port) request inputs into a
+// canonical portset.Set. New clients supply `ports`; legacy clients
+// that still send just an integer port are transparently lifted into a
+// single-port set so nothing breaks on upgrade.
+func resolvePortSet(ports string, legacyPort int) (portset.Set, error) {
+	if strings.TrimSpace(ports) != "" {
+		ps, err := portset.Parse(ports)
+		if err != nil {
+			return portset.Set{}, err
+		}
+		if ps.Empty() {
+			return portset.Set{}, errors.New("empty port list")
+		}
+		return ps, nil
+	}
+	if legacyPort < portset.MinPort || legacyPort > portset.MaxPort {
+		return portset.Set{}, errors.New("port out of range")
+	}
+	return portset.FromPort(legacyPort), nil
+}
+
+// rulePorts extracts the canonical port set from a Rule, falling back
+// to the legacy single-port column when Ports is empty.
+func rulePorts(r *model.Rule) portset.Set {
+	if strings.TrimSpace(r.Ports) != "" {
+		if ps, err := portset.Parse(r.Ports); err == nil && !ps.Empty() {
+			return ps
+		}
+	}
+	if r.Port > 0 {
+		return portset.FromPort(r.Port)
+	}
+	return portset.Set{}
 }

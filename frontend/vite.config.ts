@@ -1,28 +1,20 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import AutoImport from 'unplugin-auto-import/vite'
-import Components from 'unplugin-vue-components/vite'
-import { ArcoResolver } from 'unplugin-vue-components/resolvers'
+import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
 
 // PortPass frontend build config.
-//   - dist is emitted to ../web/dist so Go embed picks it up in M3.
+//   - dist is emitted to ../web/dist so Go embed picks it up.
 //   - /api/* during dev is proxied to the Go backend on :8080.
-//   - Arco components are registered on-demand via ArcoResolver to keep
-//     the bundle small (~200KB gzipped).
+//   - Tailwind CSS v4 via the @tailwindcss/vite plugin drives all styling.
+//     shadcn-vue primitives are copied into src/components/ui and compiled
+//     alongside the rest of the source, so there is no external UI kit to
+//     lazy-load.
 export default defineConfig({
   plugins: [
     vue(),
-    AutoImport({
-      resolvers: [ArcoResolver()],
-      imports: ['vue', 'vue-router', 'pinia'],
-      dts: 'auto-imports.d.ts'
-    }),
-    Components({
-      resolvers: [ArcoResolver({ sideEffect: true })],
-      dts: 'components.d.ts'
-    }),
+    tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons/*'],
@@ -68,11 +60,11 @@ export default defineConfig({
     chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
-        // Split heavy vendor chunks so the home-page TTI is not gated on
-        // libraries only used by the settings / users pages.
+        // Split vendor chunks so the home-page TTI is not gated on libraries
+        // only used by the settings page.
         manualChunks: {
           'vendor-vue': ['vue', 'vue-router', 'pinia', 'vue-i18n'],
-          'vendor-arco': ['@arco-design/web-vue'],
+          'vendor-ui': ['radix-vue', 'lucide-vue-next'],
           'vendor-misc': ['axios', 'dayjs']
         }
       }

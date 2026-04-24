@@ -2,23 +2,28 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Message, Notification } from '@arco-design/web-vue'
 import dayjs from 'dayjs'
-import { IconCheckCircleFill, IconLock, IconRight, IconSwap, IconClockCircle } from '@arco-design/web-vue/es/icon'
+import { CheckCircle2, Lock, ArrowRight, RotateCcw, Clock } from 'lucide-vue-next'
 import { createRule, fetchClientIP, listPresets } from '@/api/rules'
 import type { CreateRulePayload, PresetPort, Rule } from '@/api/types'
 import { useRulesStore } from '@/stores/rules'
 import { useAuthStore } from '@/stores/auth'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import { groupPresets } from '@/utils/presetCategory'
+import { parsePortSet } from '@/utils/portset'
+import { toast } from 'vue-sonner'
+import { Message } from '@/lib/toast'
+
 import CopyableText from '@/components/CopyableText.vue'
 import CountdownChip from '@/components/CountdownChip.vue'
+import PortSetInput from '@/components/PortSetInput.vue'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const store = useRulesStore()
 const auth = useAuthStore()
-const { isMobile } = useBreakpoint()
 
 const clientIP = ref<string>('')
 const ipLoading = ref(true)
@@ -27,26 +32,26 @@ const presetsLoading = ref(true)
 const submitting = ref(false)
 const lastResult = ref<Rule | null>(null)
 
-// Form state. We bind the entire object to a-form for validation.
 const form = ref({
   sourceMode: 'current' as 'current' | 'any' | 'manual',
   manualSource: '',
-  port: undefined as number | undefined,
+  ports: '' as string,
   protocol: 'tcp' as 'tcp' | 'udp' | 'both',
   durationPreset: 60 * 60 as number | undefined,
   customExpire: undefined as string | undefined,
   note: ''
 })
+// Initial validity reflects an empty ports string (invalid unless allowEmpty).
+const portsValidation = ref<{ ok: boolean, error: string | null }>({ ok: false, error: null })
 
 const rawDurationOptions = [
-  { label: '15m', minutes: 15, value: 15 * 60 },
-  { label: '1h',  minutes: 60, value: 60 * 60 },
-  { label: '4h',  minutes: 240, value: 4 * 60 * 60 },
-  { label: '12h', minutes: 720, value: 12 * 60 * 60 },
-  { label: '24h', minutes: 1440, value: 24 * 60 * 60 }
+  { label: '15m', value: 15 * 60 },
+  { label: '1h',  value: 60 * 60 },
+  { label: '4h',  value: 4 * 60 * 60 },
+  { label: '12h', value: 12 * 60 * 60 },
+  { label: '24h', value: 24 * 60 * 60 }
 ]
 
-// Greeting changes by hour for a tiny human touch.
 const greeting = computed(() => {
   const h = dayjs().hour()
   if (h < 6) return t('home.helloNight')
@@ -57,12 +62,15 @@ const greeting = computed(() => {
 
 const groupedPresets = computed(() => groupPresets(presets.value))
 
-// activePreset reflects the preset matching the typed port + protocol.
-// Drives the per-preset duration cap shown to non-admin users.
+// activePreset locates the preset matching the current port set + protocol
+// so we can surface per-preset constraints (e.g. max duration cap).
 const activePreset = computed<PresetPort | null>(() => {
-  if (!form.value.port) return null
+  const parsed = parsePortSet(form.value.ports)
+  if (!parsed.ok || parsed.count === 0) return null
   for (const p of presets.value) {
-    if (p.port !== form.value.port) continue
+    const pp = parsePortSet(p.ports || String(p.port || ''))
+    if (!pp.ok) continue
+    if (pp.canonical !== parsed.canonical) continue
     if (p.protocol === form.value.protocol || p.protocol === 'both') return p
   }
   return null
@@ -80,7 +88,6 @@ watch(durationOptions, (opts) => {
   form.value.durationPreset = opts.length ? opts[opts.length - 1].value : undefined
 })
 
-// Live preview of the resolved CIDR before submission.
 const sourcePreview = computed(() => {
   switch (form.value.sourceMode) {
     case 'current': return clientIP.value ? `${clientIP.value}/32` : '...'
@@ -90,8 +97,6 @@ const sourcePreview = computed(() => {
   return '—'
 })
 
-// Live preview of the auto-close moment, expressed both as wall-clock and
-// relative ("in 1h") so users can sanity-check the choice.
 const expirePreview = computed(() => {
   const base = dayjs()
   const expire = form.value.customExpire
@@ -99,42 +104,32 @@ const expirePreview = computed(() => {
     : (form.value.durationPreset ? base.add(form.value.durationPreset, 'second') : null)
   if (!expire) return null
   const sameDay = expire.isSame(base, 'day')
-  return {
-    abs: expire.format(sameDay ? 'HH:mm' : 'MM-DD HH:mm')
-  }
+  return { abs: expire.format(sameDay ? 'HH:mm' : 'MM-DD HH:mm') }
 })
 
-const portValid = computed(() => {
-  const p = form.value.port
-  return typeof p === 'number' && p >= 1 && p <= 65535
-})
+const portsValid = computed(() => portsValidation.value.ok)
 
 const submitDisabled = computed(() =>
-  !portValid.value
+  !portsValid.value
   || (form.value.sourceMode === 'manual' && !form.value.manualSource.trim())
 )
 
-const userOnlyAllowed = computed(() => {
-  // For non-admin users, every preset they see is already filtered by the
-  // backend. We only highlight admin-only presets when the current account
-  // *is* admin to indicate "regular users won't see this".
-  return auth.isAdmin
-})
+const userCanSeePresetLocks = computed(() => auth.isAdmin)
 
 onMounted(async () => {
   ipLoading.value = true
   try { clientIP.value = await fetchClientIP() }
-  catch { /* toast already handled by interceptor */ }
+  catch { /* handled by axios interceptor */ }
   finally { ipLoading.value = false }
 
   presetsLoading.value = true
   try { presets.value = await listPresets() }
-  catch { /* toasted */ }
+  catch { /* ditto */ }
   finally { presetsLoading.value = false }
 })
 
 function applyPreset(p: PresetPort) {
-  form.value.port = p.port
+  form.value.ports = p.ports || (p.port ? String(p.port) : '')
   form.value.protocol = (p.protocol as typeof form.value.protocol) || 'tcp'
 }
 
@@ -144,23 +139,21 @@ function pickDuration(value: number) {
 }
 
 function resetForNext() {
-  // Keep source/protocol/preset choice; clear note + result so the user can
-  // immediately fire another similar rule (typical SSH + curl + commit flow).
   form.value.note = ''
   lastResult.value = null
 }
 
-function goRules() {
-  router.push({ name: 'rules' })
-}
+function goRules() { router.push({ name: 'rules' }) }
 
 async function copySshCommand() {
   if (!lastResult.value) return
   const ip = lastResult.value.source_ip.split('/')[0]
-  const port = lastResult.value.port
-  const cmd = port === 22
-    ? `ssh -p ${port} <user>@<server>`
-    : `# 端口 ${port}/${lastResult.value.protocol} 已对 ${ip} 开放\nnc -vz <server> ${port}`
+  const portsStr = lastResult.value.ports || String(lastResult.value.port || '')
+  const parsed = parsePortSet(portsStr)
+  const firstPort = parsed.ok && parsed.ranges.length ? parsed.ranges[0].from : lastResult.value.port
+  const cmd = firstPort === 22
+    ? `ssh -p 22 <user>@<server>`
+    : `# 端口 ${portsStr}/${lastResult.value.protocol} 已对 ${ip} 开放\nnc -vz <server> ${firstPort}`
   try {
     await navigator.clipboard.writeText(cmd)
     Message.success(t('home.submittedSshHintCopied'))
@@ -177,7 +170,7 @@ async function submit() {
   submitting.value = true
   try {
     const payload: CreateRulePayload = {
-      port: form.value.port!,
+      ports: form.value.ports,
       protocol: form.value.protocol,
       note: form.value.note,
       use_client_ip: form.value.sourceMode === 'current',
@@ -189,600 +182,308 @@ async function submit() {
     }
     const r = await createRule(payload)
     lastResult.value = r
-    Notification.success({
-      title: t('msg.ruleCreated'),
-      content: `${r.source_ip} :${r.port}/${r.protocol}`,
+    toast.success(t('msg.ruleCreated'), {
+      description: `${r.source_ip} :${r.ports || r.port}/${r.protocol}`,
       duration: 2400
     })
     await store.reload()
-    // Scroll the success panel into view so the user sees the confirmation.
     requestAnimationFrame(() => {
-      document.querySelector('.pp-success-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      document.getElementById('pp-success-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   } finally {
     submitting.value = false
   }
 }
+
+type SourceMode = 'current' | 'any' | 'manual'
+interface SourceOpt { v: SourceMode; label: string; icon: string }
+const sourceOptions = computed<SourceOpt[]>(() => [
+  { v: 'current', label: t('home.sourceCurrent'), icon: '👤' },
+  { v: 'any',     label: t('home.sourceAny'),     icon: '🌍' },
+  { v: 'manual',  label: t('home.sourceManual'),  icon: '✏️' }
+])
 </script>
 
 <template>
-  <div class="pp-page home-wrap" :class="{ 'is-mobile': isMobile }">
-    <!-- Hero -->
-    <section class="hero">
-      <div class="hero-inner">
-        <div class="hero-headline">
-          <div class="hero-greeting">
-            {{ greeting }}{{ auth.me ? '，' + auth.me.username : '' }} 👋
+  <div class="pp-page flex flex-col gap-5 pb-2">
+    <!--
+      Hero — refined per the Phase-2 feedback: cleaner flat surface with a
+      single brand stripe accent, no gradients.
+    -->
+    <section class="relative overflow-hidden rounded-lg border border-border bg-card px-5 md:px-7 py-5">
+      <span class="absolute left-0 top-4 bottom-4 w-[3px] rounded-r bg-primary" aria-hidden="true" />
+      <div class="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 md:gap-6 items-center">
+        <div>
+          <div class="text-lg md:text-xl font-semibold text-foreground leading-tight">
+            {{ greeting }}<span v-if="auth.me">，{{ auth.me.username }}</span> 👋
           </div>
-          <div class="hero-sub">{{ t('home.welcomeSub') }}</div>
+          <div class="mt-1 text-xs md:text-sm text-muted-foreground leading-relaxed max-w-prose">
+            {{ t('home.welcomeSub') }}
+          </div>
         </div>
-        <div class="hero-ip">
-          <div class="hero-ip-label">{{ t('home.clientIP') }}</div>
-          <div class="hero-ip-value">
-            <a-skeleton v-if="ipLoading" :animation="true" class="hero-ip-skel">
-              <a-skeleton-line :rows="1" :widths="['180px']" />
-            </a-skeleton>
-            <template v-else>
-              <CopyableText :value="clientIP || '—'" mono />
-            </template>
+        <div class="rounded-md border border-border bg-muted/60 px-3.5 py-2.5 min-w-0 md:min-w-[220px]">
+          <div class="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
+            {{ t('home.clientIP') }}
           </div>
-          <div class="hero-ip-sub">{{ t('home.clientIPSub') }}</div>
+          <div class="text-base md:text-lg font-semibold font-mono tabular-nums text-foreground mt-0.5 min-h-[22px] flex items-center">
+            <span v-if="ipLoading" class="inline-block w-28 h-4 rounded bg-muted animate-pulse" />
+            <CopyableText v-else :value="clientIP || '—'" mono />
+          </div>
+          <div class="text-[11px] text-muted-foreground mt-0.5">
+            {{ t('home.clientIPSub') }}
+          </div>
         </div>
       </div>
     </section>
 
     <!-- Form card -->
-    <section class="form-card">
-      <header class="form-header">
-        <div>
-          <h2 class="form-title">{{ t('home.createTitle') }}</h2>
-          <p class="form-sub">{{ t('home.createSub') }}</p>
-        </div>
+    <section class="rounded-lg bg-card shadow-card flex flex-col gap-5 p-5 md:p-7">
+      <header class="pb-3 border-b border-border">
+        <h2 class="text-base md:text-lg font-semibold text-foreground mb-1">
+          {{ t('home.createTitle') }}
+        </h2>
+        <p class="text-xs md:text-sm text-muted-foreground m-0">
+          {{ t('home.createSub') }}
+        </p>
       </header>
 
       <!-- Step ① Source -->
-      <div class="step">
+      <div class="flex flex-col gap-3">
         <h3 class="pp-section-title">{{ t('home.stepWho') }}</h3>
-        <div class="source-grid">
+        <div class="grid grid-cols-3 gap-2 md:gap-2.5">
           <button
-            v-for="opt in [
-              { v: 'current', label: t('home.sourceCurrent'), icon: '👤' },
-              { v: 'any',     label: t('home.sourceAny'),     icon: '🌍' },
-              { v: 'manual',  label: t('home.sourceManual'),  icon: '✏️' }
-            ]"
+            v-for="opt in sourceOptions"
             :key="opt.v"
             type="button"
-            class="source-tile"
-            :class="{ active: form.sourceMode === opt.v }"
-            @click="form.sourceMode = opt.v as any"
+            class="flex flex-col items-center justify-center gap-1.5 py-3 px-2 rounded-md border-[1.5px] text-xs md:text-sm transition-all"
+            :class="form.sourceMode === opt.v
+              ? 'border-primary bg-primary/10 text-primary font-semibold shadow-[0_0_0_3px_rgba(22,93,255,0.08)]'
+              : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/50 hover:bg-primary/5'"
+            @click="form.sourceMode = opt.v"
           >
-            <span class="source-icon">{{ opt.icon }}</span>
-            <span class="source-label">{{ opt.label }}</span>
+            <span class="text-lg md:text-xl leading-none">{{ opt.icon }}</span>
+            <span class="leading-tight text-center">{{ opt.label }}</span>
           </button>
         </div>
-        <div v-if="form.sourceMode === 'manual'" class="source-manual">
-          <a-input
+        <div v-if="form.sourceMode === 'manual'">
+          <Input
             v-model="form.manualSource"
             :placeholder="t('home.sourceManualPlaceholder')"
-            allow-clear
-            size="large"
+            class="h-10"
           />
         </div>
-        <div class="preview-line">
-          <span class="preview-label">{{ t('home.sourcePreviewLabel') }}</span>
-          <code class="preview-value">{{ sourcePreview }}</code>
+        <div class="flex items-center gap-2 text-xs bg-muted/50 px-3 py-2 rounded-md">
+          <span class="text-muted-foreground">{{ t('home.sourcePreviewLabel') }}</span>
+          <code class="font-mono font-semibold text-foreground">{{ sourcePreview }}</code>
         </div>
       </div>
 
-      <!-- Step ② Service / port -->
-      <div class="step">
+      <!-- Step ② Port / service -->
+      <div class="flex flex-col gap-3">
         <h3 class="pp-section-title">{{ t('home.stepWhat') }}</h3>
 
-        <a-skeleton v-if="presetsLoading" :animation="true">
-          <a-skeleton-line :rows="2" :widths="['60%', '80%']" />
-        </a-skeleton>
+        <div v-if="presetsLoading" class="flex flex-col gap-2">
+          <div class="h-4 rounded bg-muted animate-pulse w-3/5" />
+          <div class="h-4 rounded bg-muted animate-pulse w-4/5" />
+        </div>
 
-        <div v-else class="preset-groups">
-          <div v-for="g in groupedPresets" :key="g.key" class="preset-group">
-            <div class="preset-group-title">
-              <span class="preset-group-icon">{{ g.icon }}</span>
+        <div v-else class="flex flex-col gap-3">
+          <div v-for="g in groupedPresets" :key="g.key" class="flex flex-col gap-1.5">
+            <div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <span class="text-sm">{{ g.icon }}</span>
               {{ t('home.cat' + g.key.charAt(0).toUpperCase() + g.key.slice(1)) }}
             </div>
-            <div class="preset-chip-row">
+            <div class="flex flex-wrap gap-1.5">
               <button
                 v-for="p in g.items"
                 :key="p.id"
                 type="button"
-                class="preset-chip"
-                :class="{ active: activePreset?.id === p.id }"
-                :title="userOnlyAllowed && !p.user_allowed ? '该端口仅管理员可开放（普通用户不可见）' : ''"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs md:text-sm transition-all"
+                :class="activePreset?.id === p.id
+                  ? 'border-primary bg-primary text-primary-foreground font-semibold'
+                  : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/50 hover:bg-primary/5 hover:text-primary'"
+                :title="userCanSeePresetLocks && !p.user_allowed ? '该端口仅管理员可开放' : ''"
                 @click="applyPreset(p)"
               >
-                <span class="preset-chip-name">{{ p.name }}</span>
-                <span class="preset-chip-port">:{{ p.port }}/{{ p.protocol }}</span>
-                <IconLock v-if="userOnlyAllowed && !p.user_allowed" class="preset-admin-only-badge" />
+                <span class="font-medium">{{ p.name }}</span>
+                <span class="font-mono text-[11px] opacity-75">{{ p.ports || p.port }}/{{ p.protocol }}</span>
+                <Lock v-if="userCanSeePresetLocks && !p.user_allowed" class="size-3 opacity-60" />
               </button>
             </div>
           </div>
         </div>
 
-        <div class="custom-port-row">
-          <div class="custom-port-field">
-            <label class="custom-port-label">{{ t('home.customPort') }}</label>
-            <a-input-number
-              v-model="form.port"
-              :min="1"
-              :max="65535"
-              :placeholder="t('home.portPlaceholder')"
-              size="large"
-              class="custom-port-input"
-              hide-button
+        <div class="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 md:gap-4 mt-2 pt-3 border-t border-dashed border-border items-start">
+          <div class="flex flex-col gap-1.5 min-w-0">
+            <Label>{{ t('home.customPort') }}</Label>
+            <PortSetInput
+              v-model="form.ports"
+              :placeholder="t('portSet.placeholder')"
+              input-class="h-10"
+              :quick="[
+                { label: '+22',  value: '22' },
+                { label: '+80',  value: '80' },
+                { label: '+443', value: '443' }
+              ]"
+              @validation="(ok: boolean, error: string | null) => (portsValidation = { ok, error })"
             />
-            <div v-if="form.port && !portValid" class="field-error">{{ t('home.portInvalid') }}</div>
           </div>
-          <div class="custom-port-field">
-            <label class="custom-port-label">{{ t('home.protocol') }}</label>
-            <a-radio-group v-model="form.protocol" type="button" size="large">
-              <a-radio value="tcp">{{ t('home.protoTcp') }}</a-radio>
-              <a-radio value="udp">{{ t('home.protoUdp') }}</a-radio>
-              <a-radio value="both">{{ t('home.protoBoth') }}</a-radio>
-            </a-radio-group>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('home.protocol') }}</Label>
+            <div class="inline-flex p-1 rounded-md bg-muted/60 border border-border">
+              <button
+                v-for="p in ['tcp', 'udp', 'both']"
+                :key="p"
+                type="button"
+                class="px-3 md:px-4 h-8 rounded text-xs md:text-sm font-medium transition-colors"
+                :class="form.protocol === p
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'"
+                @click="form.protocol = p as any"
+              >
+                {{ t('home.proto' + (p === 'tcp' ? 'Tcp' : p === 'udp' ? 'Udp' : 'Both')) }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Step ③ Duration -->
-      <div class="step">
+      <div class="flex flex-col gap-3">
         <h3 class="pp-section-title">{{ t('home.stepHowLong') }}</h3>
-        <div class="duration-row">
+        <div class="flex flex-wrap gap-2 items-center">
           <button
             v-for="opt in durationOptions"
             :key="opt.value"
             type="button"
-            class="duration-chip"
-            :class="{ active: form.durationPreset === opt.value && !form.customExpire }"
+            class="min-w-[60px] h-9 px-4 rounded-md border text-sm font-medium transition-all"
+            :class="form.durationPreset === opt.value && !form.customExpire
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'border-border bg-muted/50 text-muted-foreground hover:border-primary/50 hover:text-foreground'"
             @click="pickDuration(opt.value)"
-          >
-            {{ opt.label }}
-          </button>
-          <a-date-picker
+          >{{ opt.label }}</button>
+
+          <input
             v-model="form.customExpire"
-            show-time
-            size="large"
+            type="datetime-local"
+            class="h-9 px-3 rounded-md border border-input bg-transparent text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :placeholder="t('home.durationCustom')"
-            class="duration-custom"
           />
         </div>
-        <div v-if="!auth.isAdmin && activePreset?.max_duration_sec" class="preview-line warn">
-          <IconClockCircle />
+        <div
+          v-if="!auth.isAdmin && activePreset?.max_duration_sec"
+          class="flex items-center gap-2 text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        >
+          <Clock class="size-3.5" />
           <span>{{ t('home.durationMaxHint', { n: Math.floor(activePreset.max_duration_sec / 60) }) }}</span>
         </div>
-        <div v-if="expirePreview" class="preview-line">
-          <span class="preview-label">{{ t('home.durationPreviewPrefix') }}</span>
-          <code class="preview-value">{{ expirePreview.abs }}</code>
-          <span class="preview-label">{{ t('home.durationPreviewSuffix') }}</span>
+        <div
+          v-if="expirePreview"
+          class="flex items-center gap-2 text-xs rounded-md px-3 py-2 bg-muted/50 text-muted-foreground"
+        >
+          <span>{{ t('home.durationPreviewPrefix') }}</span>
+          <code class="font-mono font-semibold text-foreground">{{ expirePreview.abs }}</code>
+          <span>{{ t('home.durationPreviewSuffix') }}</span>
         </div>
       </div>
 
       <!-- Note -->
-      <div class="step note-step">
+      <div class="flex flex-col gap-3">
         <h3 class="pp-section-title">{{ t('home.note') }}</h3>
-        <a-textarea
+        <textarea
           v-model="form.note"
+          rows="2"
+          maxlength="255"
           :placeholder="t('home.notePlaceholder')"
-          :max-length="255"
-          allow-clear
-          show-word-limit
-          :auto-size="{ minRows: 1, maxRows: 3 }"
+          class="min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
         />
       </div>
 
-      <!-- Submit (desktop) -->
-      <div class="submit-row" v-if="!isMobile">
-        <a-button
-          type="primary"
-          size="large"
-          long
-          :loading="submitting"
-          :disabled="submitDisabled"
+      <!-- Submit (desktop inline) -->
+      <div class="hidden md:block pt-2">
+        <Button
+          size="lg"
+          class="w-full h-12 text-base"
+          :disabled="submitDisabled || submitting"
           @click="submit"
         >
-          <template #icon><IconCheckCircleFill /></template>
-          {{ submitting ? t('home.submitting') : t('home.submit') }}
-        </a-button>
+          <CheckCircle2 v-if="!submitting" class="size-5" />
+          <span v-else class="inline-block size-5 rounded-full border-2 border-primary-foreground/50 border-t-transparent animate-spin" />
+          <span>{{ submitting ? t('home.submitting') : t('home.submit') }}</span>
+        </Button>
       </div>
     </section>
 
     <!-- Success panel -->
-    <section v-if="lastResult" class="pp-success-card success-card">
-      <div class="success-head">
-        <div class="success-mark">
-          <IconCheckCircleFill />
+    <section
+      v-if="lastResult"
+      id="pp-success-panel"
+      class="relative overflow-hidden rounded-lg border border-emerald-500/30 bg-card shadow-card p-5 md:p-6"
+    >
+      <div class="absolute inset-0 pointer-events-none bg-gradient-to-br from-emerald-500/5 to-transparent" aria-hidden="true" />
+      <div class="relative flex items-center gap-3.5">
+        <div class="size-10 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
+          <CheckCircle2 class="size-6" />
         </div>
-        <div>
-          <div class="success-title">{{ t('home.submittedTitle') }}</div>
-          <div class="success-sub">{{ t('home.submittedSub') }}</div>
+        <div class="min-w-0 flex-1">
+          <div class="font-semibold text-base text-foreground">{{ t('home.submittedTitle') }}</div>
+          <div class="text-xs text-muted-foreground mt-0.5">{{ t('home.submittedSub') }}</div>
         </div>
         <CountdownChip
-          class="success-countdown"
           :expire-at="lastResult.expire_at"
           :created-at="lastResult.created_at"
         />
       </div>
 
-      <div class="success-grid">
-        <div class="success-cell">
-          <div class="success-cell-label">{{ t('rules.source') }}</div>
+      <div class="relative grid grid-cols-2 gap-y-3 gap-x-6 mt-4">
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <div class="text-[11px] uppercase tracking-wide text-muted-foreground">{{ t('rules.source') }}</div>
           <CopyableText :value="lastResult.source_ip" mono />
         </div>
-        <div class="success-cell">
-          <div class="success-cell-label">{{ t('rules.port') }}</div>
-          <span class="pp-mono">{{ lastResult.port }}/{{ lastResult.protocol }}</span>
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <div class="text-[11px] uppercase tracking-wide text-muted-foreground">{{ t('rules.port') }}</div>
+          <span class="font-mono text-sm">{{ lastResult.ports || lastResult.port }}/{{ lastResult.protocol }}</span>
         </div>
-        <div class="success-cell">
-          <div class="success-cell-label">ID</div>
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <div class="text-[11px] uppercase tracking-wide text-muted-foreground">ID</div>
           <CopyableText :value="lastResult.id" mono />
         </div>
-        <div class="success-cell">
-          <div class="success-cell-label">{{ t('rules.createdAt') }}</div>
-          <span class="pp-mono">{{ dayjs(lastResult.created_at).format('YYYY-MM-DD HH:mm:ss') }}</span>
+        <div class="flex flex-col gap-0.5 min-w-0">
+          <div class="text-[11px] uppercase tracking-wide text-muted-foreground">{{ t('rules.createdAt') }}</div>
+          <span class="font-mono text-sm">{{ dayjs(lastResult.created_at).format('YYYY-MM-DD HH:mm:ss') }}</span>
         </div>
       </div>
 
-      <div class="success-actions">
-        <a-button @click="resetForNext">
-          <template #icon><IconSwap /></template>
+      <div class="relative flex flex-wrap gap-2 mt-4">
+        <Button variant="outline" @click="resetForNext">
+          <RotateCcw class="size-4" />
           {{ t('home.submittedAgain') }}
-        </a-button>
-        <a-button @click="copySshCommand">{{ t('home.submittedSshHint') }}</a-button>
-        <a-button type="primary" @click="goRules">
+        </Button>
+        <Button variant="outline" @click="copySshCommand">
+          {{ t('home.submittedSshHint') }}
+        </Button>
+        <Button @click="goRules" class="ml-auto">
           {{ t('home.submittedView') }}
-          <template #icon><IconRight /></template>
-        </a-button>
+          <ArrowRight class="size-4" />
+        </Button>
       </div>
     </section>
 
     <!-- Mobile sticky submit bar -->
-    <div v-if="isMobile" class="mobile-bar-spacer"></div>
-    <div v-if="isMobile" class="mobile-submit-bar">
-      <a-button
-        type="primary"
-        long
-        size="large"
-        :loading="submitting"
-        :disabled="submitDisabled"
+    <div class="md:hidden h-16" aria-hidden="true" />
+    <div
+      class="md:hidden fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] z-40 p-3 bg-card border-t border-border shadow-[0_-4px_12px_rgba(15,23,42,0.06)]"
+    >
+      <Button
+        size="lg"
+        class="w-full h-12 text-base"
+        :disabled="submitDisabled || submitting"
         @click="submit"
       >
-        <template #icon><IconCheckCircleFill /></template>
-        {{ submitting ? t('home.submitting') : t('home.submit') }}
-      </a-button>
+        <CheckCircle2 v-if="!submitting" class="size-5" />
+        <span v-else class="inline-block size-5 rounded-full border-2 border-primary-foreground/50 border-t-transparent animate-spin" />
+        <span>{{ submitting ? t('home.submitting') : t('home.submit') }}</span>
+      </Button>
     </div>
   </div>
 </template>
-
-<style scoped>
-.home-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  padding-bottom: 8px;
-}
-
-/* ---------------- Hero ---------------- */
-.hero {
-  background: var(--pp-hero-bg);
-  color: var(--pp-hero-fg);
-  border-radius: 16px;
-  padding: 24px 28px;
-  box-shadow: var(--pp-shadow-2);
-  position: relative;
-  overflow: hidden;
-}
-.hero::after {
-  content: '';
-  position: absolute;
-  right: -60px;
-  top: -60px;
-  width: 220px;
-  height: 220px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(255,255,255,0.18), rgba(255,255,255,0));
-}
-.hero-inner {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 24px;
-  align-items: center;
-  position: relative;
-  z-index: 1;
-}
-.hero-greeting { font-size: 22px; font-weight: 600; line-height: 1.2; }
-.hero-sub { margin-top: 6px; opacity: 0.85; font-size: 13px; line-height: 1.6; max-width: 480px; }
-.hero-ip {
-  background: rgba(255, 255, 255, 0.13);
-  backdrop-filter: blur(6px);
-  border-radius: 12px;
-  padding: 12px 16px;
-  min-width: 240px;
-}
-.hero-ip-label { font-size: 11px; opacity: 0.8; text-transform: uppercase; letter-spacing: 0.05em; }
-.hero-ip-value {
-  font-size: 22px;
-  font-weight: 700;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  margin: 4px 0 2px;
-  display: flex;
-  align-items: center;
-}
-.hero-ip-value :deep(.pp-copyable) { color: #fff; }
-.hero-ip-value :deep(.pp-copyable:hover) { background: rgba(255,255,255,0.16); }
-.hero-ip-value :deep(.pp-copyable-icon) { color: rgba(255,255,255,0.85); }
-.hero-ip-skel :deep(.arco-skeleton-line div) { background: rgba(255,255,255,0.25) !important; }
-.hero-ip-sub { font-size: 11px; opacity: 0.75; }
-
-/* ---------------- Form card ---------------- */
-.form-card {
-  background: var(--pp-surface);
-  border-radius: 16px;
-  padding: 24px 28px 20px;
-  box-shadow: var(--pp-shadow-1);
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-.form-header { padding-bottom: 4px; border-bottom: 1px solid var(--pp-border); margin-bottom: 4px; }
-.form-title { font-size: 17px; font-weight: 600; margin: 0 0 4px 0; color: var(--color-text-1); }
-.form-sub { margin: 0; font-size: 13px; color: var(--color-text-3); }
-
-.step { display: flex; flex-direction: column; gap: 10px; }
-
-/* Source tiles */
-.source-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.source-tile {
-  appearance: none;
-  background: var(--pp-surface-soft);
-  border: 1.5px solid var(--pp-border);
-  border-radius: 10px;
-  padding: 14px 10px;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.15s ease;
-  font-size: 13px;
-  color: var(--color-text-2);
-}
-.source-tile:hover { border-color: var(--pp-brand-3); background: var(--pp-brand-1); }
-.source-tile.active {
-  border-color: var(--pp-brand-6);
-  background: var(--pp-brand-1);
-  color: var(--pp-brand-7);
-  font-weight: 600;
-  box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.12);
-}
-.source-icon { font-size: 22px; line-height: 1; }
-.source-manual { margin-top: 4px; }
-
-.preview-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--color-text-3);
-  background: var(--pp-surface-sunken);
-  padding: 8px 12px;
-  border-radius: 8px;
-}
-.preview-line.warn {
-  color: var(--pp-status-pending);
-  background: rgba(255, 125, 0, 0.08);
-}
-.preview-label { font-size: 12px; }
-.preview-value {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 13px;
-  color: var(--color-text-1);
-  font-weight: 600;
-  background: transparent;
-  padding: 0;
-}
-
-/* Preset groups */
-.preset-groups { display: flex; flex-direction: column; gap: 12px; }
-.preset-group-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--color-text-3);
-  margin-bottom: 6px;
-  font-weight: 500;
-}
-.preset-group-icon { font-size: 14px; }
-.preset-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.preset-chip {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--pp-border);
-  background: var(--pp-surface-soft);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.15s ease;
-  color: var(--color-text-2);
-}
-.preset-chip:hover {
-  border-color: var(--pp-brand-3);
-  background: var(--pp-brand-1);
-  color: var(--pp-brand-7);
-}
-.preset-chip.active {
-  border-color: var(--pp-brand-6);
-  background: var(--pp-brand-6);
-  color: #fff;
-  font-weight: 600;
-}
-.preset-chip-name { font-weight: 500; }
-.preset-chip-port { font-family: ui-monospace, monospace; font-size: 11px; opacity: 0.78; }
-.preset-chip.active .preset-chip-port { color: rgba(255,255,255,0.85); }
-.preset-admin-only-badge {
-  font-size: 10px;
-  color: var(--color-text-3);
-  background: var(--pp-surface);
-  border-radius: 999px;
-  padding: 2px;
-  margin-left: 2px;
-  opacity: 0.7;
-}
-.preset-chip.active .preset-admin-only-badge { color: rgba(255,255,255,0.9); background: rgba(255,255,255,0.16); opacity: 1; }
-
-/* Custom port row */
-.custom-port-row {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 16px;
-  margin-top: 8px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--pp-border);
-}
-.custom-port-field { display: flex; flex-direction: column; gap: 6px; }
-.custom-port-label { font-size: 12px; color: var(--color-text-3); font-weight: 500; }
-.custom-port-input { width: 100%; }
-.field-error { font-size: 12px; color: var(--pp-status-failed); }
-
-/* Duration */
-.duration-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.duration-chip {
-  appearance: none;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--pp-border);
-  background: var(--pp-surface-soft);
-  cursor: pointer;
-  font-weight: 500;
-  font-size: 13px;
-  color: var(--color-text-2);
-  transition: all 0.15s ease;
-  min-width: 60px;
-}
-.duration-chip:hover { border-color: var(--pp-brand-3); }
-.duration-chip.active {
-  background: var(--pp-brand-6);
-  color: #fff;
-  border-color: var(--pp-brand-6);
-}
-.duration-custom { width: 240px; }
-
-.note-step :deep(.arco-textarea-wrapper) { border-radius: 10px; }
-
-/* Submit (desktop) */
-.submit-row { padding-top: 8px; }
-.submit-row :deep(.arco-btn) { font-size: 15px; height: 48px; border-radius: 10px; }
-
-/* ---------------- Success card ---------------- */
-.success-card {
-  background: var(--pp-surface);
-  border-radius: 16px;
-  padding: 22px 26px;
-  box-shadow: var(--pp-shadow-2);
-  border: 1px solid rgba(0, 180, 42, 0.25);
-  position: relative;
-  overflow: hidden;
-}
-.success-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, rgba(0, 180, 42, 0.06), transparent 50%);
-  pointer-events: none;
-}
-.success-head { display: flex; align-items: center; gap: 14px; position: relative; z-index: 1; }
-.success-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--pp-status-active);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  flex: 0 0 40px;
-}
-.success-title { font-size: 16px; font-weight: 600; color: var(--color-text-1); }
-.success-sub { font-size: 12px; color: var(--color-text-3); margin-top: 2px; }
-.success-countdown { margin-left: auto; }
-
-.success-grid {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px 24px;
-  position: relative;
-  z-index: 1;
-}
-.success-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13px;
-  color: var(--color-text-1);
-}
-.success-cell-label { font-size: 11px; color: var(--color-text-3); text-transform: uppercase; letter-spacing: 0.04em; }
-
-.success-actions {
-  margin-top: 16px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  position: relative;
-  z-index: 1;
-}
-
-/* ---------------- Mobile ---------------- */
-.mobile-bar-spacer { height: 64px; }
-.mobile-submit-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
-  background: var(--pp-surface);
-  border-top: 1px solid var(--pp-border);
-  z-index: 50;
-  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
-}
-.mobile-submit-bar :deep(.arco-btn) { height: 48px; font-size: 15px; border-radius: 10px; }
-
-.is-mobile .hero { padding: 18px 18px; border-radius: 14px; }
-.is-mobile .hero-inner { grid-template-columns: 1fr; gap: 12px; }
-.is-mobile .hero-ip { min-width: 0; }
-.is-mobile .form-card { padding: 18px 16px; border-radius: 14px; }
-.is-mobile .source-grid { gap: 8px; }
-.is-mobile .source-tile { padding: 10px 6px; font-size: 12px; }
-.is-mobile .source-icon { font-size: 18px; }
-.is-mobile .custom-port-row { grid-template-columns: 1fr; gap: 12px; }
-.is-mobile .duration-custom { width: 100%; }
-.is-mobile .success-card { padding: 18px 16px; border-radius: 14px; }
-.is-mobile .success-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
-.is-mobile .success-actions { flex-direction: column; }
-.is-mobile .success-actions :deep(.arco-btn) { width: 100%; }
-
-@media (max-width: 480px) {
-  .source-grid { grid-template-columns: 1fr; }
-  .duration-row .duration-chip { flex: 1; min-width: 0; }
-}
-</style>

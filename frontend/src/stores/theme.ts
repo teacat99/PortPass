@@ -5,9 +5,9 @@ import { computed, ref, watch } from 'vue'
 // explicit choice is persisted to localStorage; "auto" follows the system
 // preference and reacts live to OS-level changes (prefers-color-scheme).
 //
-// We intentionally avoid Arco's dark-mode helper because we want the same
-// CSS variable swap to drive both Arco components AND our own custom CSS.
-// Toggling the `arco-theme="dark"` attribute on <body> achieves both.
+// Tailwind v4 reads a `.dark` class on the <html> element (see globals.css
+// @custom-variant dark) so that's what we toggle here. Every hand-rolled
+// CSS variable in :root / .dark flips in lockstep.
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
 
@@ -35,13 +35,11 @@ export const useThemeStore = defineStore('theme', () => {
   )
 
   function apply() {
-    const body = document.body
+    const root = document.documentElement
     if (isDark.value) {
-      body.setAttribute('arco-theme', 'dark')
-      body.classList.add('pp-dark')
+      root.classList.add('dark')
     } else {
-      body.removeAttribute('arco-theme')
-      body.classList.remove('pp-dark')
+      root.classList.remove('dark')
     }
     // Drive the browser chrome colour (status bar / address bar) too.
     const meta = document.querySelector('meta[name="theme-color"]')
@@ -54,8 +52,8 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function toggle() {
-    // Two-state toggle ignores "auto" and snaps to the opposite of what
-    // is currently rendered.
+    // Two-state toggle ignores "auto" and snaps to the opposite of what is
+    // currently rendered.
     setMode(isDark.value ? 'light' : 'dark')
   }
 

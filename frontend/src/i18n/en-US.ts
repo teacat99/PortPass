@@ -10,6 +10,64 @@ export default {
     users: 'Users',
     settings: 'Settings'
   },
+  role: {
+    admin: 'root',
+    user: 'user'
+  },
+  common: {
+    cancel: 'Cancel',
+    confirm: 'Confirm',
+    save: 'Save',
+    delete: 'Delete',
+    edit: 'Edit',
+    close: 'Close',
+    all: 'All'
+  },
+  pwa: {
+    title: 'Install PortPass',
+    desc: 'Get a native-like window, faster launch and a home-screen icon',
+    install: 'Install',
+    later: 'Later',
+    iosHint: 'On Safari: tap Share → Add to Home Screen',
+    dismissHint: 'Won\'t ask again for 14 days'
+  },
+  portSet: {
+    placeholder: 'e.g. 22 or 80,443,8080-8090',
+    invalid: 'Invalid port format',
+    count: '{n} ports',
+    entries: '{n} segments'
+  },
+  protected: {
+    title: 'Protected ports',
+    subtitle: 'These ports are in-use by this server and cannot be opened by anyone (admins included)',
+    empty: 'No protected ports yet',
+    name: 'Name',
+    ports: 'Ports',
+    protocol: 'Protocol',
+    note: 'Note',
+    new: 'New protected port',
+    edit: 'Edit protected port',
+    deleteConfirm: 'Remove this protected port?',
+    conflictWithPreset: 'Conflicts with an existing user-allowed preset'
+  },
+  userRanges: {
+    drawerTitle: 'Personal port policy',
+    drawerSub: 'Restrict what ports this user can temporarily open',
+    column: 'Port policy',
+    colDefault: 'Default (using presets)',
+    colCount: '{n} custom rule(s)',
+    emptyNote: 'No personal policy set — falling back to user-allowed presets.',
+    overrideNote: 'Personal policy is active: this user can only open ports listed below. The global preset list is fully overridden.',
+    addRange: 'Add range',
+    editRange: 'Edit range',
+    clearAll: 'Clear personal policy',
+    clearAllConfirm: 'Clear this user\'s personal policy? They will fall back to the default presets.',
+    name: 'Name',
+    ports: 'Ports',
+    protocol: 'Protocol',
+    maxDuration: 'Max duration (sec, 0 = unlimited)',
+    note: 'Note'
+  },
   action: {
     submit: 'Submit',
     cancel: 'Cancel',
@@ -143,10 +201,16 @@ export default {
   },
   settings: {
     title: 'Settings',
+    tabUsers: 'Users',
     tabPresets: 'Preset ports',
+    tabProtected: 'Protected ports',
+    tabRuntime: 'Runtime',
     tabDefaults: 'Defaults',
     tabProxies: 'Trusted proxies',
     tabAuth: 'Auth mode',
+    sectionBasics: 'Basics',
+    sectionProxies: 'Trusted proxies',
+    sectionAuth: 'Auth mode',
     authMode: 'Current auth mode',
     firewallDriver: 'Firewall driver',
     maxDuration: 'Max duration (hours)',
@@ -154,8 +218,10 @@ export default {
     trustedProxies: 'Trusted proxy CIDR list',
     userAllowed: 'Available to users',
     userAllowedHelp: 'When enabled, non-admin users may open this port',
-    maxDurationSec: 'Max duration per rule for users (sec)',
-    maxDurationSecHelp: '0 disables the per-port cap (still bounded by the global max duration)'
+    maxDurationSec: 'Max rule duration / sec',
+    maxDurationSecHelp: '0 disables the per-port cap (still bounded by the global max duration)',
+    envHint: 'Description',
+    envValue: 'Value'
   },
   login: {
     title: 'Sign in to PortPass',
@@ -194,6 +260,8 @@ export default {
     userUpdated: 'User updated',
     userDeleted: 'User deleted',
     loadFailed: 'Load failed',
-    invalidInput: 'Invalid input'
+    invalidInput: 'Invalid input',
+    saved: 'Saved',
+    deleted: 'Deleted'
   }
 }

@@ -3,6 +3,7 @@ export interface Rule {
   user_id: number
   source_ip: string
   port: number
+  ports: string
   protocol: string
   note: string
   status: string
@@ -20,10 +21,29 @@ export interface PresetPort {
   id: number
   name: string
   port: number
+  ports: string
   protocol: string
   sort: number
   user_allowed: boolean
   max_duration_sec: number
+}
+
+export interface ProtectedPort {
+  id: number
+  name: string
+  ports: string
+  protocol: string
+  note: string
+}
+
+export interface UserAllowedRange {
+  id: number
+  user_id: number
+  name: string
+  ports: string
+  protocol: string
+  max_duration_sec: number
+  note: string
 }
 
 export type Role = 'admin' | 'user'
@@ -62,7 +82,8 @@ export interface SettingsBundle {
 export interface CreateRulePayload {
   source_ip?: string
   use_client_ip?: boolean
-  port: number
+  port?: number
+  ports?: string
   protocol: string
   duration_sec?: number
   expire_at?: string

@@ -58,17 +58,21 @@ rule family="ipv6" port port="53" protocol="udp" log prefix="portpass:100" level
 }
 
 func TestBuildRichRule(t *testing.T) {
-	rr := buildRichRule("1.2.3.4/32", 22, "tcp", "portpass:1")
+	rr := buildRichRule("1.2.3.4/32", "22", "tcp", "portpass:1")
 	if !containsAll(rr, `family="ipv4"`, `source address="1.2.3.4/32"`, `port port="22"`, `protocol="tcp"`, `portpass:1`) {
 		t.Fatalf("rich rule missing parts: %s", rr)
 	}
-	rr6 := buildRichRule("2001:db8::/32", 80, "tcp", "portpass:2")
+	rr6 := buildRichRule("2001:db8::/32", "80", "tcp", "portpass:2")
 	if !containsAll(rr6, `family="ipv6"`, `source address="2001:db8::/32"`) {
 		t.Fatalf("ipv6 rule incorrect: %s", rr6)
 	}
-	rrAny := buildRichRule("", 443, "tcp", "portpass:3")
+	rrAny := buildRichRule("", "443", "tcp", "portpass:3")
 	if containsAll(rrAny, `source address`) {
 		t.Fatalf("empty source should omit clause, got %s", rrAny)
+	}
+	rrRange := buildRichRule("10.0.0.0/8", "8080-8090", "tcp", "portpass:4")
+	if !containsAll(rrRange, `port port="8080-8090"`) {
+		t.Fatalf("range rich rule missing range: %s", rrRange)
 	}
 }
 

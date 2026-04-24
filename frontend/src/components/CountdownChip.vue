@@ -3,20 +3,13 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import dayjs from 'dayjs'
 
 // CountdownChip renders a compact pill that shows the remaining time of a
-// rule until expire_at. The colour transitions through 4 states:
-//   - >30%   green  (calm)
-//   - >10%   amber  (heads-up)
-//   - >0%    red    (critical)
-//   - 0/past gray   (expired)
-//
-// We accept either an ISO string or a Date and tick once per second from
-// onMounted to onUnmounted to keep the table cheap.
+// rule until expire_at. Colour transitions through four tones based on the
+// fraction of time remaining, so even without reading the label the user
+// gets a visual "how hot is this" cue.
 
 const props = defineProps<{
   expireAt: string | Date
-  /** Created-at to compute the % remaining ratio for the colour ramp. */
   createdAt?: string | Date
-  /** Visual size: default | small */
   size?: 'default' | 'small'
 }>()
 
@@ -43,6 +36,29 @@ const tone = computed<'ok' | 'warn' | 'danger' | 'expired'>(() => {
   return 'danger'
 })
 
+const toneClass = computed(() => {
+  switch (tone.value) {
+    case 'ok':
+      return 'text-emerald-600 border-emerald-500/40 dark:text-emerald-400'
+    case 'warn':
+      return 'text-amber-600 border-amber-500/40 dark:text-amber-400'
+    case 'danger':
+      return 'text-destructive border-destructive/40 animate-pulse'
+    case 'expired':
+    default:
+      return 'text-muted-foreground border-border'
+  }
+})
+
+const barTone = computed(() => {
+  switch (tone.value) {
+    case 'ok':      return 'bg-emerald-500/15'
+    case 'warn':    return 'bg-amber-500/15'
+    case 'danger':  return 'bg-destructive/15'
+    default:        return 'bg-muted'
+  }
+})
+
 const label = computed(() => {
   const ms = remainingMs.value
   if (ms <= 0) return '已过期'
@@ -58,53 +74,18 @@ const label = computed(() => {
 </script>
 
 <template>
-  <span class="pp-cd" :class="['tone-' + tone, size === 'small' ? 'sm' : '']">
-    <span class="pp-cd-bar" :style="{ width: (Math.min(100, ratio * 100)) + '%' }"></span>
-    <span class="pp-cd-label">{{ label }}</span>
+  <span
+    class="relative inline-flex items-center justify-center rounded-full border text-xs font-medium tabular-nums overflow-hidden"
+    :class="[
+      toneClass,
+      size === 'small' ? 'min-w-[72px] px-2 py-[1px] text-[11px]' : 'min-w-[92px] px-2.5 py-0.5'
+    ]"
+  >
+    <span
+      class="absolute inset-y-0 left-0 transition-[width] duration-1000 linear"
+      :class="barTone"
+      :style="{ width: (Math.min(100, ratio * 100)) + '%' }"
+    />
+    <span class="relative z-10 whitespace-nowrap">{{ label }}</span>
   </span>
 </template>
-
-<style scoped>
-.pp-cd {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 10px;
-  min-width: 90px;
-  border-radius: 999px;
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  font-weight: 500;
-  overflow: hidden;
-  background: var(--pp-surface-sunken);
-  color: var(--color-text-2);
-  border: 1px solid var(--pp-border);
-}
-.pp-cd.sm { min-width: 72px; padding: 1px 8px; font-size: 11px; }
-.pp-cd-bar {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: currentColor;
-  opacity: 0.16;
-  transition: width 1s linear;
-  z-index: 0;
-}
-.pp-cd-label { position: relative; z-index: 1; }
-
-.tone-ok { color: var(--pp-status-active); border-color: rgba(0, 180, 42, 0.4); }
-.tone-warn { color: var(--pp-status-pending); border-color: rgba(255, 125, 0, 0.4); }
-.tone-danger {
-  color: var(--pp-status-failed);
-  border-color: rgba(245, 63, 63, 0.4);
-  animation: pp-cd-pulse 1.4s ease-in-out infinite;
-}
-.tone-expired { color: var(--color-text-3); }
-
-@keyframes pp-cd-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 63, 63, 0); }
-  50% { box-shadow: 0 0 0 4px rgba(245, 63, 63, 0.18); }
-}
-</style>

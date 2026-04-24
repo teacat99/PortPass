@@ -5,7 +5,23 @@ import (
 	"strings"
 
 	"github.com/teacat99/PortPass/internal/model"
+	"github.com/teacat99/PortPass/internal/portset"
 )
+
+// rulePorts parses the rule's port group. Falls back to the legacy
+// single-port column when Ports is empty so drivers keep working during
+// the rollout period.
+func rulePorts(r *model.Rule) portset.Set {
+	if strings.TrimSpace(r.Ports) != "" {
+		if ps, err := portset.Parse(r.Ports); err == nil && !ps.Empty() {
+			return ps
+		}
+	}
+	if r.Port > 0 {
+		return portset.FromPort(r.Port)
+	}
+	return portset.Set{}
+}
 
 // Driver abstracts an OS-level firewall backend capable of inserting,
 // removing and listing rules tagged by PortPass. Multiple implementations are

@@ -1,5 +1,5 @@
 import axios, { type AxiosInstance } from 'axios'
-import { Message } from '@arco-design/web-vue'
+import { Message } from '@/lib/toast'
 
 // Shared axios instance. Base URL is empty so requests flow through the
 // same origin (supports both dev proxy and embedded production serving).
