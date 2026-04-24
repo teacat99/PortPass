@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Languages } from 'lucide-vue-next'
+import LanguageIcon from '@/components/LanguageIcon.vue'
 import { useAuthStore } from '@/stores/auth'
 import { setLocale } from '@/i18n'
 import { Message } from '@/lib/toast'
@@ -71,7 +71,7 @@ async function submit(e?: Event) {
       <Tooltip>
         <TooltipTrigger as-child>
           <Button variant="ghost" size="icon" aria-label="locale" @click="toggleLocale">
-            <Languages />
+            <LanguageIcon />
           </Button>
         </TooltipTrigger>
         <TooltipContent>

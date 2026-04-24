@@ -7,13 +7,13 @@ import {
   List,
   History,
   Settings,
-  Languages,
   LogOut,
   User as UserIcon,
   Lock,
   Moon,
   Sun
 } from 'lucide-vue-next'
+import LanguageIcon from '@/components/LanguageIcon.vue'
 import { setLocale } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -206,7 +206,7 @@ async function submitPassword() {
         <Tooltip>
           <TooltipTrigger as-child>
             <Button variant="ghost" size="icon" aria-label="locale" @click="toggleLocale">
-              <Languages />
+              <LanguageIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent>
