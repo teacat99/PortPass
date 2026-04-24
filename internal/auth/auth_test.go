@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -23,10 +24,13 @@ func mustCIDR(s string) *net.IPNet {
 }
 
 // fakeUserRepo is an in-memory UserRepo used by the tests; it keeps the
-// test surface free of SQLite. Index by id and by username.
+// test surface free of SQLite. Index by id and by username, and keeps a
+// tiny slice of LoginAttempt rows so we can exercise the brute-force
+// limiter without booting the database.
 type fakeUserRepo struct {
-	byID   map[uint]*model.User
-	byName map[string]*model.User
+	byID     map[uint]*model.User
+	byName   map[string]*model.User
+	attempts []model.LoginAttempt
 }
 
 func newFakeRepo(us ...*model.User) *fakeUserRepo {
@@ -44,6 +48,42 @@ func (r *fakeUserRepo) GetUserByUsername(name string) (*model.User, error) {
 
 func (r *fakeUserRepo) GetUserByID(id uint) (*model.User, error) {
 	return r.byID[id], nil
+}
+
+func (r *fakeUserRepo) RecordLoginAttempt(a *model.LoginAttempt) error {
+	a.CreatedAt = time.Now()
+	r.attempts = append(r.attempts, *a)
+	return nil
+}
+
+func (r *fakeUserRepo) CountLoginFailuresByIP(ip string, since time.Time) (int64, error) {
+	var n int64
+	for _, a := range r.attempts {
+		if !a.Success && a.ClientIP == ip && !a.CreatedAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r *fakeUserRepo) CountLoginFailuresByUsername(username string, since time.Time) (int64, error) {
+	var n int64
+	for _, a := range r.attempts {
+		if !a.Success && a.Username == username && !a.CreatedAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r *fakeUserRepo) LastSuccessfulLogin(username string) (*model.LoginAttempt, error) {
+	for i := len(r.attempts) - 1; i >= 0; i-- {
+		a := r.attempts[i]
+		if a.Success && a.Username == username {
+			return &a, nil
+		}
+	}
+	return nil, nil
 }
 
 func hash(pw string) string {
@@ -182,6 +222,136 @@ func TestIPWhitelistMode_SystemAdminPrincipal(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != 403 {
 		t.Fatalf("non-whitelisted IP: want 403 got %d", w.Code)
+	}
+}
+
+func TestPasswordMode_IPLockout(t *testing.T) {
+	cfg := &config.Config{
+		AuthMode:               config.AuthModePassword,
+		AdminUsername:          "admin",
+		LoginFailMaxPerIP:      3,
+		LoginFailWindowIPMin:   10,
+		LoginFailMaxPerUser:    0, // focus on IP path
+		LoginFailWindowUserMin: 0,
+		LoginLockoutIPMin:      10,
+	}
+	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
+	a := New(cfg, newFakeRepo(admin))
+	r := newEngine(a)
+
+	bad := strings.NewReader(``)
+	_ = bad
+
+	// Exhaust the limit: 3 failed attempts, all returning 401.
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/auth/login",
+			strings.NewReader(`{"username":"admin","password":"wrong"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "203.0.113.7:1234"
+		r.ServeHTTP(w, req)
+		if w.Code != 401 {
+			t.Fatalf("attempt #%d want 401 got %d", i+1, w.Code)
+		}
+	}
+
+	// Next attempt - even with the correct password - must be locked out.
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/auth/login",
+		strings.NewReader(`{"username":"admin","password":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.7:5678"
+	r.ServeHTTP(w, req)
+	if w.Code != 429 {
+		t.Fatalf("after IP lockout: want 429 got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Code    string `json:"code"`
+		RetrySec int   `json:"retry_after_secs"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Code != ReasonLockedIP || resp.RetrySec != 600 {
+		t.Fatalf("unexpected lockout payload: %+v", resp)
+	}
+}
+
+func TestPasswordMode_UsernameLockout(t *testing.T) {
+	cfg := &config.Config{
+		AuthMode:               config.AuthModePassword,
+		AdminUsername:          "admin",
+		LoginFailMaxPerUser:    2,
+		LoginFailWindowUserMin: 15,
+		LoginLockoutUserMin:    15,
+	}
+	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
+	a := New(cfg, newFakeRepo(admin))
+	r := newEngine(a)
+
+	// Two failed attempts from different IPs - simulating a proxy pool -
+	// should still trip the per-username limiter.
+	for i, ip := range []string{"198.51.100.1:1", "198.51.100.2:2"} {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/auth/login",
+			strings.NewReader(`{"username":"admin","password":"nope"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = ip
+		r.ServeHTTP(w, req)
+		if w.Code != 401 {
+			t.Fatalf("attempt #%d want 401 got %d", i+1, w.Code)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/auth/login",
+		strings.NewReader(`{"username":"admin","password":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "198.51.100.9:9"
+	r.ServeHTTP(w, req)
+	if w.Code != 429 {
+		t.Fatalf("after username lockout: want 429 got %d", w.Code)
+	}
+}
+
+func TestPasswordMode_LastLoginReturned(t *testing.T) {
+	cfg := &config.Config{AuthMode: config.AuthModePassword, AdminUsername: "admin"}
+	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
+	a := New(cfg, newFakeRepo(admin))
+	r := newEngine(a)
+
+	// First login: no prior record, no last_login in response.
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/auth/login",
+		strings.NewReader(`{"username":"admin","password":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "10.0.0.1:1"
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("first login want 200 got %d", w.Code)
+	}
+	var first map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &first)
+	if _, ok := first["last_login"]; ok {
+		t.Fatalf("first login should NOT expose last_login: %+v", first)
+	}
+
+	// Second login from a different IP should echo the first IP as last_login.
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("POST", "/api/auth/login",
+		strings.NewReader(`{"username":"admin","password":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "10.0.0.2:1"
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("second login want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+	var second map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &second)
+	ll, ok := second["last_login"].(map[string]any)
+	if !ok {
+		t.Fatalf("second login must expose last_login: %+v", second)
+	}
+	if ip, _ := ll["client_ip"].(string); ip != "10.0.0.1" {
+		t.Fatalf("unexpected last_login ip: %+v", ll)
 	}
 }
 

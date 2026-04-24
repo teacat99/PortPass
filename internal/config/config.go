@@ -35,6 +35,17 @@ type Config struct {
 	MaxRulesPerIP           int
 	RateLimitPerMinutePerIP int
 	JWTSecret               string
+
+	// Login hardening (brute-force defence). All values are tunable via
+	// env vars; defaults target a balanced posture for a small self-hosted
+	// tool. Window and lockout durations are in minutes.
+	LoginFailMaxPerIP       int
+	LoginFailWindowIPMin    int
+	LoginFailMaxPerUser     int
+	LoginFailWindowUserMin  int
+	LoginLockoutIPMin       int
+	LoginLockoutUserMin     int
+	LoginMinPasswordLen     int
 }
 
 // Load reads environment variables and returns a populated Config, applying
@@ -53,6 +64,14 @@ func Load() (*Config, error) {
 		MaxRulesPerIP:           envInt("PORTPASS_MAX_RULES_PER_IP", 20),
 		RateLimitPerMinutePerIP: envInt("PORTPASS_RATELIMIT_PER_MINUTE", 10),
 		JWTSecret:               envOr("PORTPASS_JWT_SECRET", ""),
+
+		LoginFailMaxPerIP:      envInt("PORTPASS_LOGIN_FAIL_MAX_PER_IP", 10),
+		LoginFailWindowIPMin:   envInt("PORTPASS_LOGIN_FAIL_WINDOW_IP_MINUTES", 10),
+		LoginFailMaxPerUser:    envInt("PORTPASS_LOGIN_FAIL_MAX_PER_USER", 5),
+		LoginFailWindowUserMin: envInt("PORTPASS_LOGIN_FAIL_WINDOW_USER_MINUTES", 15),
+		LoginLockoutIPMin:      envInt("PORTPASS_LOGIN_LOCKOUT_IP_MINUTES", 10),
+		LoginLockoutUserMin:    envInt("PORTPASS_LOGIN_LOCKOUT_USER_MINUTES", 15),
+		LoginMinPasswordLen:    envInt("PORTPASS_LOGIN_MIN_PASSWORD_LEN", 8),
 	}
 
 	switch cfg.AuthMode {

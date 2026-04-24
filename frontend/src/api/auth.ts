@@ -1,10 +1,27 @@
 import client from './client'
 import type { Me, Role } from './types'
 
+export interface LastLoginInfo {
+  at: string
+  client_ip: string
+  user_agent?: string
+}
+
 export interface LoginResponse {
   token: string
   username: string
   role: Role
+  last_login?: LastLoginInfo
+}
+
+export interface LoginAttempt {
+  id: number
+  username: string
+  client_ip: string
+  success: boolean
+  reason: string
+  user_agent?: string
+  created_at: string
 }
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
@@ -27,4 +44,16 @@ export async function changeOwnPassword(oldPassword: string, newPassword: string
     old_password: oldPassword,
     new_password: newPassword
   })
+}
+
+export async function fetchMyLoginHistory(limit = 20): Promise<LoginAttempt[]> {
+  const { data } = await client.get<{ attempts: LoginAttempt[] }>('/auth/my-recent-logins', {
+    params: { limit }
+  })
+  return data.attempts ?? []
+}
+
+export async function fetchLoginHistory(params: { username?: string; limit?: number } = {}): Promise<LoginAttempt[]> {
+  const { data } = await client.get<{ attempts: LoginAttempt[] }>('/auth/login-history', { params })
+  return data.attempts ?? []
 }

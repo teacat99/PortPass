@@ -230,11 +230,40 @@ export default {
     password: 'Password',
     passwordPlaceholder: 'passwd',
     failed: 'Login failed',
+    retryIn: 'Please try again in {seconds}s',
+    lockedUntil: 'This account is temporarily locked',
     error: {
       invalid_credentials: 'Incorrect username or password',
       auth_disabled: 'Password login is disabled in this deployment',
-      bad_request: 'Malformed request'
+      bad_request: 'Malformed request',
+      user_disabled: 'This account has been disabled; contact an administrator',
+      locked_ip: 'Too many failed attempts from your network; try again later',
+      locked_user: 'Too many failed attempts for this account; try again later',
+      password_too_short: 'Password must be at least {min} characters',
+      password_missing_letter: 'Password must contain at least one letter',
+      password_missing_digit: 'Password must contain at least one digit',
+      internal: 'Server error, please retry in a moment'
     }
+  },
+  security: {
+    title: 'Login history',
+    subtitle: 'Review recent sign-in attempts (including failures) for unauthorised access.',
+    lastLogin: 'Last login: {ip} · {time}',
+    neverBefore: 'This is the first sign-in for this account',
+    my: 'My recent sign-ins',
+    all: 'All sign-in attempts',
+    usernameFilter: 'Filter by username',
+    columns: {
+      time: 'Time',
+      username: 'Account',
+      ip: 'IP',
+      result: 'Result',
+      reason: 'Reason',
+      ua: 'Client'
+    },
+    success: 'Success',
+    failure: 'Failure',
+    empty: 'No records'
   },
   status: {
     pending: 'Pending',

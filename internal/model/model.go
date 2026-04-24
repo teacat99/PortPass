@@ -125,3 +125,18 @@ type AuditLog struct {
 	Detail    string    `gorm:"type:text" json:"detail"`
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
+
+// LoginAttempt records every authentication attempt (success or failure)
+// so we can rate-limit attackers, detect brute force, and give real users
+// visibility into activity on their account. Separate from AuditLog because
+// we keep a tighter retention window (matching LoginFailWindow*) and the
+// hot-path cardinality is very different.
+type LoginAttempt struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Username  string    `gorm:"index;size:64" json:"username"`
+	ClientIP  string    `gorm:"index;size:64" json:"client_ip"`
+	Success   bool      `gorm:"index" json:"success"`
+	Reason    string    `gorm:"size:64" json:"reason"`
+	UserAgent string    `gorm:"size:255" json:"user_agent"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}

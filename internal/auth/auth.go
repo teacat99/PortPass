@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -20,10 +21,16 @@ import (
 
 // UserRepo captures the parts of the user store that the authenticator
 // needs. Keeping it narrow lets the unit tests provide a lightweight fake
-// without booting a real SQLite database.
+// without booting a real SQLite database. The login-attempt methods back
+// the brute-force defence; the user methods back the credential lookup.
 type UserRepo interface {
 	GetUserByUsername(name string) (*model.User, error)
 	GetUserByID(id uint) (*model.User, error)
+
+	RecordLoginAttempt(a *model.LoginAttempt) error
+	CountLoginFailuresByIP(ip string, since time.Time) (int64, error)
+	CountLoginFailuresByUsername(username string, since time.Time) (int64, error)
+	LastSuccessfulLogin(username string) (*model.LoginAttempt, error)
 }
 
 // Authenticator bundles login and middleware logic for a specific AuthMode.
@@ -45,6 +52,20 @@ const (
 	ctxKeyUserID   = "pp_user_id"
 	ctxKeyUsername = "pp_username"
 	ctxKeyRole     = "pp_role"
+)
+
+// Login failure reason codes. They live in the DB verbatim (short, stable
+// machine-readable strings) so the UI and audit log consumers can filter
+// on them without parsing free-form English text.
+const (
+	ReasonOK             = "ok"
+	ReasonBadRequest     = "bad_request"
+	ReasonInvalidCreds   = "invalid_credentials"
+	ReasonUserDisabled   = "user_disabled"
+	ReasonAuthDisabled   = "auth_disabled"
+	ReasonLockedIP       = "locked_ip"
+	ReasonLockedUser     = "locked_user"
+	ReasonInternal       = "internal"
 )
 
 // New initialises an Authenticator. When no JWT secret is configured we
@@ -117,22 +138,63 @@ func Principal(c *gin.Context) (id uint, username, role string) {
 	return
 }
 
+// recordAttempt writes one login_attempts row and best-effort swallows
+// the error: a DB write failure must not prevent the auth response.
+func (a *Authenticator) recordAttempt(username, ip, userAgent, reason string, success bool) {
+	_ = a.users.RecordLoginAttempt(&model.LoginAttempt{
+		Username:  username,
+		ClientIP:  ip,
+		Success:   success,
+		Reason:    reason,
+		UserAgent: truncate(userAgent, 255),
+	})
+}
+
+// penaltyDelay returns the per-attempt slowdown we inject on failures. It
+// is driven by the running failure count for this username so normal
+// users feel no delay on a single typo, while scripted attackers stall:
+//   count=1 -> 100ms, 2 -> 200ms, 3 -> 400ms, ... capped at 5s.
+// We apply it AFTER recording the failure so the counter is already up
+// to date when the next attempt is evaluated.
+func penaltyDelay(count int) time.Duration {
+	if count <= 0 {
+		return 0
+	}
+	ms := 100 * math.Pow(2, float64(count-1))
+	if ms > 5000 {
+		ms = 5000
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // LoginHandler authenticates against the users table (bcrypt) and returns
 // a signed JWT. Password auth is the only mode that exposes this endpoint.
+//
+// Brute-force defence: every attempt is recorded in login_attempts. Before
+// checking the password we reject requests whose client IP or submitted
+// username has already crossed the configured failure threshold within
+// the rolling window, answering 429 with a retry_after hint. Failed
+// attempts additionally get an exponential delay so scripted attackers
+// see their RPS collapse. All counters are persisted, so a server
+// restart does not wipe the attacker's state.
 func (a *Authenticator) LoginHandler(c *gin.Context) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password" binding:"required"`
 	}
+	clientIP := netutil.ClientIP(c.Request, a.cfg.TrustedProxies)
+	userAgent := c.GetHeader("User-Agent")
+
 	if err := c.ShouldBindJSON(&req); err != nil {
+		a.recordAttempt("", clientIP, userAgent, ReasonBadRequest, false)
 		// `code` is a stable machine-readable discriminator the frontend
 		// maps to localised user-facing strings; `error` is the English
 		// fallback kept for non-browser clients and log scrapers.
-		c.JSON(http.StatusBadRequest, gin.H{"code": "bad_request", "error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"code": ReasonBadRequest, "error": err.Error()})
 		return
 	}
 	if a.cfg.AuthMode != config.AuthModePassword {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "auth_disabled", "error": "password auth disabled"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": ReasonAuthDisabled, "error": "password auth disabled"})
 		return
 	}
 	username := strings.TrimSpace(req.Username)
@@ -145,32 +207,106 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 			username = "admin"
 		}
 	}
+
+	// --- 1. IP lockout check -------------------------------------------------
+	if a.cfg.LoginFailMaxPerIP > 0 && a.cfg.LoginFailWindowIPMin > 0 {
+		since := time.Now().Add(-time.Duration(a.cfg.LoginFailWindowIPMin) * time.Minute)
+		n, err := a.users.CountLoginFailuresByIP(clientIP, since)
+		if err == nil && int(n) >= a.cfg.LoginFailMaxPerIP {
+			retry := a.cfg.LoginLockoutIPMin
+			if retry <= 0 {
+				retry = a.cfg.LoginFailWindowIPMin
+			}
+			a.recordAttempt(username, clientIP, userAgent, ReasonLockedIP, false)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":              ReasonLockedIP,
+				"error":             "too many failed attempts from this address",
+				"retry_after_secs":  retry * 60,
+			})
+			return
+		}
+	}
+
+	// --- 2. Username lockout check ------------------------------------------
+	if a.cfg.LoginFailMaxPerUser > 0 && a.cfg.LoginFailWindowUserMin > 0 {
+		since := time.Now().Add(-time.Duration(a.cfg.LoginFailWindowUserMin) * time.Minute)
+		n, err := a.users.CountLoginFailuresByUsername(username, since)
+		if err == nil && int(n) >= a.cfg.LoginFailMaxPerUser {
+			retry := a.cfg.LoginLockoutUserMin
+			if retry <= 0 {
+				retry = a.cfg.LoginFailWindowUserMin
+			}
+			a.recordAttempt(username, clientIP, userAgent, ReasonLockedUser, false)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":              ReasonLockedUser,
+				"error":             "too many failed attempts for this account",
+				"retry_after_secs":  retry * 60,
+			})
+			return
+		}
+	}
+
+	// --- 3. Credential verification -----------------------------------------
 	u, err := a.users.GetUserByUsername(username)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "internal", "error": err.Error()})
+		a.recordAttempt(username, clientIP, userAgent, ReasonInternal, false)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": ReasonInternal, "error": err.Error()})
 		return
 	}
+	verified := false
+	disabledHit := false
 	if u == nil || u.Disabled || u.PasswordHash == "" {
 		// Do a dummy bcrypt compare so the response timing does not leak
 		// whether the username exists.
 		_ = bcrypt.CompareHashAndPassword([]byte("$2a$10$invalidinvalidinvalidinvaOZQZQ0ZQZQZQZQZQZQZQZQZQZQZQZQO"), []byte(req.Password))
-		c.JSON(http.StatusUnauthorized, gin.H{"code": "invalid_credentials", "error": "invalid credentials"})
+		disabledHit = u != nil && u.Disabled
+	} else if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err == nil {
+		verified = true
+	}
+
+	if !verified {
+		reason := ReasonInvalidCreds
+		if disabledHit {
+			reason = ReasonUserDisabled
+		}
+		a.recordAttempt(username, clientIP, userAgent, reason, false)
+		// Running failure count for this username drives the delay.
+		if a.cfg.LoginFailWindowUserMin > 0 {
+			since := time.Now().Add(-time.Duration(a.cfg.LoginFailWindowUserMin) * time.Minute)
+			if n, err := a.users.CountLoginFailuresByUsername(username, since); err == nil {
+				time.Sleep(penaltyDelay(int(n)))
+			}
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"code": ReasonInvalidCreds, "error": "invalid credentials"})
 		return
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": "invalid_credentials", "error": "invalid credentials"})
-		return
-	}
+
+	// --- 4. Success ----------------------------------------------------------
 	tok, err := a.sign(u)
 	if err != nil {
+		a.recordAttempt(username, clientIP, userAgent, ReasonInternal, false)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	// Fetch the previous successful login BEFORE recording this one, so the
+	// "last login" banner shows the session the user cares about (the one
+	// before this one) rather than the attempt they just completed.
+	prev, _ := a.users.LastSuccessfulLogin(username)
+	a.recordAttempt(username, clientIP, userAgent, ReasonOK, true)
+
+	resp := gin.H{
 		"token":    tok,
 		"username": u.Username,
 		"role":     u.Role,
-	})
+	}
+	if prev != nil {
+		resp["last_login"] = gin.H{
+			"at":         prev.CreatedAt,
+			"client_ip":  prev.ClientIP,
+			"user_agent": prev.UserAgent,
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // StatusHandler exposes enough metadata for the frontend router to decide
@@ -252,4 +388,13 @@ func randomSecret(n int) []byte {
 	out := make([]byte, hex.EncodedLen(n))
 	hex.Encode(out, buf)
 	return out
+}
+
+// truncate clamps a string at max UTF-8 bytes; used to keep User-Agent
+// values within the DB column width without panicking on multibyte input.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }

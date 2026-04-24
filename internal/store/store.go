@@ -53,6 +53,7 @@ func New(path string) (*Store, error) {
 		&model.Setting{},
 		&model.AuditLog{},
 		&model.User{},
+		&model.LoginAttempt{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -633,4 +634,88 @@ func (s *Store) DeleteUserAllowedRange(id uint) error {
 // The policy layer then reverts to preset.user_allowed fallback.
 func (s *Store) ClearUserAllowedRanges(userID uint) error {
 	return s.db.Where("user_id = ?", userID).Delete(&model.UserAllowedRange{}).Error
+}
+
+// ------------------------- login attempts -------------------------
+
+// RecordLoginAttempt persists one login attempt (success or failure).
+// Errors are returned so the caller can log without blocking auth flow,
+// but callers typically ignore them (the audit log is best-effort).
+func (s *Store) RecordLoginAttempt(a *model.LoginAttempt) error {
+	a.CreatedAt = time.Now()
+	return s.db.Create(a).Error
+}
+
+// CountLoginFailuresByIP returns the number of failed attempts from ip
+// since `since`. Used by the brute-force limiter.
+func (s *Store) CountLoginFailuresByIP(ip string, since time.Time) (int64, error) {
+	var n int64
+	err := s.db.Model(&model.LoginAttempt{}).
+		Where("client_ip = ? AND success = ? AND created_at >= ?", ip, false, since).
+		Count(&n).Error
+	return n, err
+}
+
+// CountLoginFailuresByUsername returns the number of failed attempts for
+// username since `since`. Used by the brute-force limiter.
+func (s *Store) CountLoginFailuresByUsername(username string, since time.Time) (int64, error) {
+	var n int64
+	err := s.db.Model(&model.LoginAttempt{}).
+		Where("username = ? AND success = ? AND created_at >= ?", username, false, since).
+		Count(&n).Error
+	return n, err
+}
+
+// ListLoginAttempts returns recent login attempts. When username is empty
+// all rows are returned (admin view); otherwise the query is scoped to
+// that user (self-service view).
+func (s *Store) ListLoginAttempts(username string, limit int) ([]model.LoginAttempt, error) {
+	q := s.db.Model(&model.LoginAttempt{})
+	if username != "" {
+		q = q.Where("username = ?", username)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	var out []model.LoginAttempt
+	err := q.Order("created_at DESC").Limit(limit).Find(&out).Error
+	return out, err
+}
+
+// LastSuccessfulLogin returns the most recent successful login for username.
+// Callers invoke this BEFORE recording the current success so the returned
+// row is the previous session. Returns (nil, nil) when the user has never
+// logged in successfully.
+func (s *Store) LastSuccessfulLogin(username string) (*model.LoginAttempt, error) {
+	var row model.LoginAttempt
+	err := s.db.Where("username = ? AND success = ?", username, true).
+		Order("created_at DESC").First(&row).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+// PurgeLoginAttempts trims the login_attempts table. Failed rows live
+// `failRetentionDays` days (default 30), successful rows live indefinitely
+// (useful for auditing) unless `successRetentionDays` > 0 is given.
+func (s *Store) PurgeLoginAttempts(failRetentionDays, successRetentionDays int) error {
+	if failRetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -failRetentionDays)
+		if err := s.db.Where("success = ? AND created_at < ?", false, cutoff).
+			Delete(&model.LoginAttempt{}).Error; err != nil {
+			return err
+		}
+	}
+	if successRetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -successRetentionDays)
+		if err := s.db.Where("success = ? AND created_at < ?", true, cutoff).
+			Delete(&model.LoginAttempt{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

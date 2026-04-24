@@ -5,7 +5,7 @@ import {
   Plus, RefreshCw, Pencil, Trash2,
   ShieldCheck, Clock, Database, Cog,
   Lock, Users as UsersIcon, Settings as SettingsIcon,
-  AlertTriangle, Package
+  AlertTriangle, Package, History, Check, X as XIcon
 } from 'lucide-vue-next'
 import { deletePreset, getSettings, listPresets, upsertPreset } from '@/api/rules'
 import {
@@ -14,9 +14,11 @@ import {
 import {
   createUser, deleteUser, listUsers, resetUserPassword, updateUser
 } from '@/api/users'
+import { fetchLoginHistory, type LoginAttempt } from '@/api/auth'
 import type {
   PresetPort, ProtectedPort, SettingsBundle, User, Role
 } from '@/api/types'
+import dayjs from 'dayjs'
 import { useAuthStore } from '@/stores/auth'
 import { categorize } from '@/utils/presetCategory'
 import { envHint } from '@/utils/envMeta'
@@ -50,7 +52,27 @@ import {
 const { t, locale } = useI18n()
 const auth = useAuthStore()
 
-const activeTab = ref<'users' | 'presets' | 'protected' | 'runtime'>('users')
+const activeTab = ref<'users' | 'presets' | 'protected' | 'security' | 'runtime'>('users')
+
+// Login history (Security tab). We load on first visit and when the user
+// hits refresh; this avoids paying for the query on every Settings visit.
+const loginAttempts = ref<LoginAttempt[]>([])
+const loginAttemptsLoading = ref(false)
+const loginAttemptsFilter = ref('')
+
+async function loadLoginHistory() {
+  loginAttemptsLoading.value = true
+  try {
+    loginAttempts.value = await fetchLoginHistory({
+      username: loginAttemptsFilter.value.trim() || undefined,
+      limit: 200,
+    })
+  } catch {
+    loginAttempts.value = []
+  } finally {
+    loginAttemptsLoading.value = false
+  }
+}
 
 const settings = ref<SettingsBundle | null>(null)
 const presets = ref<PresetPort[]>([])
@@ -454,8 +476,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
     </section>
 
     <!-- Tabs -->
-    <Tabs v-model="activeTab" class="w-full">
-      <TabsList class="grid grid-cols-4 w-full md:w-auto md:inline-grid bg-muted/60 p-1 rounded-md">
+    <Tabs v-model="activeTab" class="w-full" @update:model-value="(v) => { if (v === 'security' && loginAttempts.length === 0) loadLoginHistory() }">
+      <TabsList class="grid grid-cols-5 w-full md:w-auto md:inline-grid bg-muted/60 p-1 rounded-md">
         <TabsTrigger value="users" class="gap-1.5">
           <UsersIcon class="size-3.5" />
           <span class="hidden sm:inline">{{ t('settings.tabUsers') }}</span>
@@ -473,6 +495,11 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           <span class="hidden sm:inline">{{ t('settings.tabProtected') }}</span>
           <span class="sm:hidden">受保护</span>
           <Badge variant="destructive" class="text-[10px] h-4 px-1.5 ml-0.5">{{ protectedPorts.length }}</Badge>
+        </TabsTrigger>
+        <TabsTrigger value="security" class="gap-1.5">
+          <History class="size-3.5" />
+          <span class="hidden sm:inline">{{ t('security.title') }}</span>
+          <span class="sm:hidden">登录</span>
         </TabsTrigger>
         <TabsTrigger value="runtime" class="gap-1.5">
           <SettingsIcon class="size-3.5" />
@@ -896,6 +923,94 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
                 {{ t('action.delete') }}
               </Button>
             </div>
+          </div>
+        </div>
+      </TabsContent>
+
+      <!-- Security / Login history -->
+      <TabsContent value="security" class="flex flex-col gap-4 mt-4">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
+          <p class="text-sm text-muted-foreground m-0">{{ t('security.subtitle') }}</p>
+          <div class="flex items-center gap-2">
+            <Input
+              v-model="loginAttemptsFilter"
+              :placeholder="t('security.usernameFilter')"
+              class="h-9 w-44"
+              @keydown.enter="loadLoginHistory"
+            />
+            <Button variant="outline" :disabled="loginAttemptsLoading" @click="loadLoginHistory">
+              <RefreshCw class="size-4" :class="{ 'animate-spin': loginAttemptsLoading }" />
+              {{ t('action.refresh') }}
+            </Button>
+          </div>
+        </div>
+
+        <EmptyState
+          v-if="!loginAttemptsLoading && loginAttempts.length === 0"
+          icon="🛡️"
+          :title="t('security.empty')"
+          :description="t('security.subtitle')"
+        />
+
+        <div v-else class="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow class="bg-muted/50 hover:bg-muted/50">
+                <TableHead class="w-[180px]">{{ t('security.columns.time') }}</TableHead>
+                <TableHead class="w-[140px]">{{ t('security.columns.username') }}</TableHead>
+                <TableHead class="w-[160px]">{{ t('security.columns.ip') }}</TableHead>
+                <TableHead class="w-[110px]">{{ t('security.columns.result') }}</TableHead>
+                <TableHead class="w-[180px]">{{ t('security.columns.reason') }}</TableHead>
+                <TableHead>{{ t('security.columns.ua') }}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="a in loginAttempts" :key="a.id">
+                <TableCell class="font-mono text-xs tabular-nums">
+                  {{ dayjs(a.created_at).format('YYYY-MM-DD HH:mm:ss') }}
+                </TableCell>
+                <TableCell class="font-medium">{{ a.username || '—' }}</TableCell>
+                <TableCell class="font-mono text-xs">{{ a.client_ip || '—' }}</TableCell>
+                <TableCell>
+                  <Badge v-if="a.success" variant="default" class="gap-1">
+                    <Check class="size-3" />
+                    {{ t('security.success') }}
+                  </Badge>
+                  <Badge v-else variant="destructive" class="gap-1">
+                    <XIcon class="size-3" />
+                    {{ t('security.failure') }}
+                  </Badge>
+                </TableCell>
+                <TableCell class="text-xs text-muted-foreground">{{ a.reason || '—' }}</TableCell>
+                <TableCell class="text-xs text-muted-foreground max-w-[320px] truncate" :title="a.user_agent">
+                  {{ a.user_agent || '—' }}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+
+        <!-- Mobile list -->
+        <div class="md:hidden flex flex-col gap-2">
+          <div
+            v-for="a in loginAttempts"
+            :key="a.id"
+            class="rounded-md border border-border bg-card p-3 flex flex-col gap-1.5"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-sm font-medium truncate">{{ a.username || '—' }}</div>
+              <Badge v-if="a.success" variant="default" class="gap-1">
+                <Check class="size-3" />
+                {{ t('security.success') }}
+              </Badge>
+              <Badge v-else variant="destructive" class="gap-1">
+                <XIcon class="size-3" />
+                {{ t('security.failure') }}
+              </Badge>
+            </div>
+            <div class="text-xs font-mono text-muted-foreground">{{ a.client_ip || '—' }}</div>
+            <div class="text-xs text-muted-foreground">{{ dayjs(a.created_at).format('YYYY-MM-DD HH:mm:ss') }}</div>
+            <div v-if="a.reason" class="text-xs text-muted-foreground">{{ a.reason }}</div>
           </div>
         </div>
       </TabsContent>

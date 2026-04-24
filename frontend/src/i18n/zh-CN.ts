@@ -230,11 +230,40 @@ export default {
     password: '密码',
     passwordPlaceholder: 'passwd',
     failed: '登录失败',
+    retryIn: '请于 {seconds} 秒后再试',
+    lockedUntil: '当前账号已被临时锁定',
     error: {
       invalid_credentials: '用户名或密码错误',
       auth_disabled: '当前部署未启用密码登录',
-      bad_request: '请求格式错误'
+      bad_request: '请求格式错误',
+      user_disabled: '账号已被停用，请联系管理员',
+      locked_ip: '当前网络登录失败次数过多，已临时锁定',
+      locked_user: '该账号登录失败次数过多，已临时锁定',
+      password_too_short: '密码至少 {min} 位',
+      password_missing_letter: '密码需至少包含一个字母',
+      password_missing_digit: '密码需至少包含一个数字',
+      internal: '服务端错误，请稍后再试'
     }
+  },
+  security: {
+    title: '登录历史',
+    subtitle: '查看登录尝试（含失败），用于排查未授权访问',
+    lastLogin: '上次登录：{ip} · {time}',
+    neverBefore: '这是该账号首次登录',
+    my: '我的最近登录',
+    all: '全部登录记录',
+    usernameFilter: '按用户名筛选',
+    columns: {
+      time: '时间',
+      username: '账号',
+      ip: 'IP',
+      result: '结果',
+      reason: '原因',
+      ua: '客户端'
+    },
+    success: '成功',
+    failure: '失败',
+    empty: '暂无记录'
   },
   status: {
     pending: '等待中',

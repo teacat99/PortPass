@@ -12,10 +12,77 @@ import (
 	"github.com/teacat99/PortPass/internal/model"
 )
 
-// minPasswordLen is the bare-minimum length we accept for user-provided
-// passwords. Intentionally low so operators on small home setups are not
-// frustrated; callers should pair it with the seeded-admin log warning.
-const minPasswordLen = 6
+// minPasswordLen is the floor length for user-supplied passwords. The
+// actual limit used by the handlers comes from cfg.LoginMinPasswordLen,
+// with this const as the safety default when config was not wired (tests).
+const minPasswordLen = 8
+
+// passwordPolicyError is returned from validatePassword when a password
+// does not meet the policy. The string is machine-readable so the UI
+// can localise it; the English phrasing is the log / CLI fallback.
+type passwordPolicyError struct {
+	code string
+	min  int
+}
+
+func (e *passwordPolicyError) Error() string {
+	switch e.code {
+	case "password_too_short":
+		return fmt.Sprintf("password must be at least %d characters", e.min)
+	case "password_missing_letter":
+		return "password must contain at least one letter"
+	case "password_missing_digit":
+		return "password must contain at least one digit"
+	}
+	return "password does not meet policy"
+}
+
+// validatePassword enforces the policy: >= min length AND contains at
+// least one ASCII letter AND one digit. We intentionally do NOT require
+// special characters - empirical data shows complexity requirements push
+// users toward predictable substitutions without adding real entropy.
+func validatePassword(pw string, min int) error {
+	if min <= 0 {
+		min = minPasswordLen
+	}
+	if len(pw) < min {
+		return &passwordPolicyError{code: "password_too_short", min: min}
+	}
+	hasLetter, hasDigit := false, false
+	for _, r := range pw {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		}
+		if hasLetter && hasDigit {
+			break
+		}
+	}
+	if !hasLetter {
+		return &passwordPolicyError{code: "password_missing_letter", min: min}
+	}
+	if !hasDigit {
+		return &passwordPolicyError{code: "password_missing_digit", min: min}
+	}
+	return nil
+}
+
+// respondPasswordPolicy wires a passwordPolicyError (or generic error)
+// into the standard {code, error} JSON envelope so the frontend can show
+// a localised message.
+func respondPasswordPolicy(c *gin.Context, err error) {
+	if ppe, ok := err.(*passwordPolicyError); ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    ppe.code,
+			"error":   ppe.Error(),
+			"min_len": ppe.min,
+		})
+		return
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+}
 
 // ensureAdmin aborts the request with 403 when the current principal is
 // not an admin. Returns true on success so the caller can continue.
@@ -61,8 +128,8 @@ func (s *Server) handleChangeOwnPassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if len(req.NewPassword) < minPasswordLen {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("password must be at least %d chars", minPasswordLen)})
+	if err := validatePassword(req.NewPassword, s.cfg.LoginMinPasswordLen); err != nil {
+		respondPasswordPolicy(c, err)
 		return
 	}
 	uid := currentUserID(c)
@@ -94,6 +161,68 @@ func (s *Server) handleChangeOwnPassword(c *gin.Context) {
 		Detail: "self",
 	})
 	c.Status(http.StatusOK)
+}
+
+// ------------------------- /api/auth/login-history -------------------------
+
+// handleMyLoginHistory returns the last N login attempts (success AND
+// failure) for the signed-in user. Lets real users see "someone tried to
+// log in to my account" and, combined with the "last login" field in the
+// login response, gives them visibility into their own activity without
+// exposing other accounts.
+func (s *Server) handleMyLoginHistory(c *gin.Context) {
+	_, name, _ := auth.Principal(c)
+	if name == "" {
+		c.JSON(http.StatusOK, gin.H{"attempts": []model.LoginAttempt{}})
+		return
+	}
+	limit := parseLimit(c, 20, 100)
+	rows, err := s.store.ListLoginAttempts(name, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"attempts": rows})
+}
+
+// handleLoginHistory is the admin-only, unscoped view of login attempts.
+// Used by Settings > Security to audit brute-force activity or confirm
+// an account wasn't compromised. Optional ?username= narrows the query.
+func (s *Server) handleLoginHistory(c *gin.Context) {
+	if !s.ensureAdmin(c) {
+		return
+	}
+	limit := parseLimit(c, 50, 500)
+	username := strings.TrimSpace(c.Query("username"))
+	rows, err := s.store.ListLoginAttempts(username, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"attempts": rows})
+}
+
+// parseLimit extracts a bounded ?limit= from the request. Anything out of
+// range (including unparseable) snaps back to the default.
+func parseLimit(c *gin.Context, def, max int) int {
+	raw := c.Query("limit")
+	if raw == "" {
+		return def
+	}
+	n := 0
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return def
+		}
+		n = n*10 + int(r-'0')
+		if n > max {
+			return max
+		}
+	}
+	if n <= 0 {
+		return def
+	}
+	return n
 }
 
 // ------------------------- /api/users (admin-only) -------------------------
@@ -130,8 +259,8 @@ func (s *Server) handleCreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "username required"})
 		return
 	}
-	if len(req.Password) < minPasswordLen {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("password must be at least %d chars", minPasswordLen)})
+	if err := validatePassword(req.Password, s.cfg.LoginMinPasswordLen); err != nil {
+		respondPasswordPolicy(c, err)
 		return
 	}
 	role := normaliseRole(req.Role)
@@ -270,8 +399,8 @@ func (s *Server) handleResetUserPassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if len(req.NewPassword) < minPasswordLen {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("password must be at least %d chars", minPasswordLen)})
+	if err := validatePassword(req.NewPassword, s.cfg.LoginMinPasswordLen); err != nil {
+		respondPasswordPolicy(c, err)
 		return
 	}
 	target, err := s.store.GetUserByID(id)

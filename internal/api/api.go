@@ -138,6 +138,9 @@ func (s *Server) Router(engine *gin.Engine) {
 	// Identity & self-service.
 	g.GET("/auth/me", s.handleMe)
 	g.POST("/auth/password", s.handleChangeOwnPassword)
+	// Login history: self-view for every user, system-wide for admins.
+	g.GET("/auth/my-recent-logins", s.handleMyLoginHistory)
+	g.GET("/auth/login-history", s.handleLoginHistory)
 
 	// Rules are visible to every authenticated user; per-role scoping is
 	// applied inside the handler (admin sees all, user sees own).

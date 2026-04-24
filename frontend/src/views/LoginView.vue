@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import LanguageIcon from '@/components/LanguageIcon.vue'
@@ -16,9 +16,6 @@ const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
-// Kept minimal; login page only exposes locale toggle (no theme / user menu)
-// because the page is reached pre-auth. The toggle mirrors the header button
-// in AppLayout so returning users see a familiar control.
 function toggleLocale() {
   setLocale(locale.value === 'zh-CN' ? 'en-US' : 'zh-CN')
 }
@@ -27,29 +24,66 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
+// Brute-force lockout state. When the backend returns 429 with
+// retry_after_secs we surface an in-page banner + countdown so the user
+// understands why the submit button is disabled, and we don't send any
+// further requests that would just fail again.
+const lockoutSecs = ref(0)
+const lockoutMessage = ref('')
+let lockoutTimer: ReturnType<typeof setInterval> | null = null
+
+const submitDisabled = computed(
+  () => loading.value || !username.value.trim() || !password.value || lockoutSecs.value > 0,
+)
+
+function startLockout(secs: number, code: string) {
+  if (lockoutTimer) clearInterval(lockoutTimer)
+  lockoutSecs.value = secs
+  lockoutMessage.value = t(`login.error.${code}`)
+  lockoutTimer = setInterval(() => {
+    lockoutSecs.value = Math.max(0, lockoutSecs.value - 1)
+    if (lockoutSecs.value === 0 && lockoutTimer) {
+      clearInterval(lockoutTimer)
+      lockoutTimer = null
+      lockoutMessage.value = ''
+    }
+  }, 1000)
+}
+
+onBeforeUnmount(() => {
+  if (lockoutTimer) clearInterval(lockoutTimer)
+})
+
 onMounted(async () => {
   await auth.refreshStatus()
 })
 
 async function submit(e?: Event) {
   e?.preventDefault()
-  if (!username.value.trim() || !password.value) return
+  if (submitDisabled.value) return
   loading.value = true
   try {
     await auth.login(username.value.trim(), password.value)
     const redirect = (route.query.redirect as string) || '/'
     router.replace(redirect)
   } catch (err: any) {
-    // Backend returns `{code, error}` for auth/login failures. We prefer
-    // the localised `login.error.<code>` bundle so that toggling locale
-    // translates the message immediately; the English `error` string is
-    // only used as a final fallback for unrecognised codes.
+    const status = err?.response?.status as number | undefined
     const code = err?.response?.data?.code as string | undefined
     const english = err?.response?.data?.error as string | undefined
+    const retryAfter = err?.response?.data?.retry_after_secs as number | undefined
+
+    if (status === 429 && retryAfter && code) {
+      startLockout(retryAfter, code)
+      Message.error(t(`login.error.${code}`))
+      return
+    }
+
+    // Backend returns `{code, error}` for auth/login failures. Prefer
+    // the localised `login.error.<code>` bundle so toggling locale
+    // translates the message immediately; English `error` is a fallback.
     const localisedKey = code ? `login.error.${code}` : ''
-    const translated = localisedKey && t(localisedKey) !== localisedKey
-      ? t(localisedKey)
-      : undefined
+    const translated =
+      localisedKey && t(localisedKey) !== localisedKey ? t(localisedKey) : undefined
     Message.error(translated ?? english ?? t('login.failed'))
   } finally {
     loading.value = false
@@ -91,6 +125,17 @@ async function submit(e?: Event) {
         </div>
       </div>
 
+      <div
+        v-if="lockoutSecs > 0"
+        class="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        role="alert"
+      >
+        <div class="font-medium">{{ lockoutMessage || t('login.lockedUntil') }}</div>
+        <div class="mt-0.5 text-xs opacity-80">
+          {{ t('login.retryIn', { seconds: lockoutSecs }) }}
+        </div>
+      </div>
+
       <form class="flex flex-col gap-4" @submit="submit">
         <div class="flex flex-col gap-1.5">
           <Label for="login-username">{{ t('login.username') }}</Label>
@@ -120,10 +165,11 @@ async function submit(e?: Event) {
           type="submit"
           size="lg"
           class="w-full mt-2"
-          :disabled="loading || !username.trim() || !password"
+          :disabled="submitDisabled"
         >
           <span v-if="loading" class="inline-block size-4 rounded-full border-2 border-primary-foreground/50 border-t-transparent animate-spin" />
-          <span>{{ t('action.login') }}</span>
+          <span v-if="lockoutSecs > 0">{{ t('login.retryIn', { seconds: lockoutSecs }) }}</span>
+          <span v-else>{{ t('action.login') }}</span>
         </Button>
       </form>
     </div>

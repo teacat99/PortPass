@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { authStatus, getMe, login as apiLogin } from '@/api/auth'
+import { authStatus, getMe, login as apiLogin, type LastLoginInfo } from '@/api/auth'
 import type { Me, Role } from '@/api/types'
 
 // useAuthStore centralises everything the UI needs about the current
@@ -12,6 +12,10 @@ export const useAuthStore = defineStore('auth', () => {
   const mode = ref<string>('password')
   const required = ref<boolean>(true)
   const me = ref<Me | null>(null)
+  // `lastLogin` is populated from the /auth/login response so the Home
+  // dashboard can show "last signed in from X at Y" — a lightweight way
+  // for real users to spot unauthorised access to their account.
+  const lastLogin = ref<LastLoginInfo | null>(null)
 
   const isAdmin = computed<boolean>(() => me.value?.role === 'admin')
   const role = computed<Role | null>(() => me.value?.role ?? null)
@@ -38,6 +42,7 @@ export const useAuthStore = defineStore('auth', () => {
     const resp = await apiLogin(username, password)
     token.value = resp.token
     localStorage.setItem('portpass.token', resp.token)
+    lastLogin.value = resp.last_login ?? null
     me.value = {
       id: 0, // real id comes from /auth/me; login response has no id yet
       username: resp.username,
@@ -50,8 +55,9 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     token.value = ''
     me.value = null
+    lastLogin.value = null
     localStorage.removeItem('portpass.token')
   }
 
-  return { token, mode, required, me, isAdmin, role, refreshStatus, fetchMe, login, logout }
+  return { token, mode, required, me, lastLogin, isAdmin, role, refreshStatus, fetchMe, login, logout }
 })

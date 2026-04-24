@@ -221,6 +221,18 @@ const sourceOptions = computed<SourceOpt[]>(() => [
           <div class="mt-1 text-xs md:text-sm text-muted-foreground leading-relaxed max-w-prose">
             {{ t('home.welcomeSub') }}
           </div>
+          <div
+            v-if="auth.lastLogin"
+            class="mt-2 text-[11px] md:text-xs text-muted-foreground/90 flex items-center gap-1.5 font-mono tabular-nums"
+          >
+            <span class="inline-block size-1.5 rounded-full bg-primary/70" aria-hidden="true" />
+            {{
+              t('security.lastLogin', {
+                ip: auth.lastLogin.client_ip || '—',
+                time: dayjs(auth.lastLogin.at).format('YYYY-MM-DD HH:mm'),
+              })
+            }}
+          </div>
         </div>
         <div class="rounded-md border border-border bg-muted/60 px-3.5 py-2.5 min-w-0 md:min-w-[220px]">
           <div class="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
