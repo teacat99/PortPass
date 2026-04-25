@@ -1,8 +1,23 @@
 import axios, { type AxiosInstance } from 'axios'
 import { Message } from '@/lib/toast'
+import i18n from '@/i18n'
 
-// Shared axios instance. Base URL is empty so requests flow through the
-// same origin (supports both dev proxy and embedded production serving).
+const errorMap: Record<string, string> = {
+  'rate limit exceeded': 'msg.rateLimitExceeded',
+  'concurrent rule quota exceeded': 'msg.concurrentQuotaExceeded',
+}
+
+function localiseError(raw: string): string {
+  const t = i18n.global.t as (key: string) => string
+  const lower = raw.toLowerCase()
+  for (const [pattern, key] of Object.entries(errorMap)) {
+    if (lower.includes(pattern)) return t(key)
+  }
+  if (lower.includes('duration exceeds allowed')) return t('msg.durationExceeded')
+  if (lower.includes('expiry exceeds max')) return t('msg.expiryExceeded')
+  return raw
+}
+
 const client: AxiosInstance = axios.create({
   baseURL: '/api',
   timeout: 15000
@@ -21,7 +36,8 @@ client.interceptors.response.use(
   (resp) => resp,
   (err) => {
     const status = err?.response?.status
-    const message = err?.response?.data?.error ?? err.message ?? '网络错误'
+    const raw: string = err?.response?.data?.error ?? err.message ?? 'Network error'
+    const message = localiseError(raw)
     if (status === 401) {
       localStorage.removeItem('portpass.token')
       if (!location.pathname.endsWith('/login')) {

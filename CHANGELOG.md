@@ -4,6 +4,24 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.1.1] - 2026-04-26
+
+### 优化
+
+- **全面多语言适配**：设置页概览卡片、Tab 标签、用户/预设/受保护端口管理面板、历史页面重置/分页按钮、规则页面搜索/空状态文案，全部从硬编码中文改为 i18n 动态切换
+- **API 错误消息本地化**：拦截器将后端英文错误消息（`duration exceeds`、`rate limit exceeded` 等）映射为前端 i18n 翻译，中英文均可正确展示
+- **通知弹窗优化**：位置从左上角改为右上角；缩小 padding 使高度低于顶栏；关闭按钮移至消息窗口右侧
+- **首页文案精简**：删除 IP 卡片的冗余描述文案；"只允许我（当前 IP）"简化为"只允许我"，中英文同步适配
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.1.1
+docker pull ghcr.io/teacat99/portpass:1.1.1
+```
+
+数据库无变更，自动迁移无需手动操作。
+
 ## [1.1.0] - 2026-04-25
 
 ### 新增
@@ -69,5 +87,6 @@ docker pull ghcr.io/teacat99/portpass:1.0.0
 
 数据库由 GORM 自动迁移，无需手动操作。
 
+[1.1.1]: https://github.com/teacat99/PortPass/releases/tag/v1.1.1
 [1.1.0]: https://github.com/teacat99/PortPass/releases/tag/v1.1.0
 [1.0.0]: https://github.com/teacat99/PortPass/releases/tag/v1.0.0

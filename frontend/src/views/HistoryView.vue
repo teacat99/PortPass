@@ -98,7 +98,7 @@ onMounted(reload)
     <header class="flex items-end justify-between gap-4 flex-wrap">
       <div>
         <h1 class="text-xl font-semibold text-foreground m-0">{{ t('history.title') }}</h1>
-        <p class="text-sm text-muted-foreground mt-1 m-0">查看过去的全部规则操作（含到期、撤销、失败）</p>
+        <p class="text-sm text-muted-foreground mt-1 m-0">{{ t('history.subtitle') }}</p>
       </div>
       <Button variant="outline" size="sm" :disabled="loading" @click="reload">
         <RefreshCw :class="['size-4', loading && 'animate-spin']" />
@@ -139,7 +139,7 @@ onMounted(reload)
           <DateTimePicker v-model="filter.to" />
         </div>
         <div class="flex gap-2 col-span-2 md:col-span-1 justify-end">
-          <Button variant="outline" size="sm" @click="reset">重置</Button>
+          <Button variant="outline" size="sm" @click="reset">{{ t('history.reset') }}</Button>
           <Button size="sm" @click="reload">
             <SearchIcon class="size-4" />
             {{ t('action.search') }}
@@ -160,11 +160,11 @@ onMounted(reload)
       <EmptyState
         v-else-if="!rules.length"
         icon="📜"
-        title="暂无符合条件的历史"
-        description="尝试调整时间范围或清空筛选条件，重新搜索。"
+        :title="t('history.emptyTitle')"
+        :description="t('history.emptyDesc')"
       >
         <template #action>
-          <Button variant="outline" @click="reset">清空筛选</Button>
+          <Button variant="outline" @click="reset">{{ t('history.clearFilter') }}</Button>
         </template>
       </EmptyState>
 
@@ -178,7 +178,7 @@ onMounted(reload)
               <TableHead class="w-[180px]">{{ t('rules.source') }}</TableHead>
               <TableHead class="w-[140px]">{{ t('rules.port') }}</TableHead>
               <TableHead class="w-[160px]">{{ t('history.actor') }}</TableHead>
-              <TableHead class="w-[100px]">用户</TableHead>
+              <TableHead class="w-[100px]">{{ t('history.user') }}</TableHead>
               <TableHead class="w-[130px]">{{ t('rules.createdAt') }}</TableHead>
               <TableHead class="w-[130px]">{{ t('history.terminatedAt') }}</TableHead>
               <TableHead class="w-[90px]">{{ t('history.duration') }}</TableHead>
@@ -257,7 +257,7 @@ onMounted(reload)
           class="flex items-center justify-between px-4 py-3 border-t border-border text-sm"
         >
           <span class="text-muted-foreground text-xs">
-            共 {{ rules.length }} 条 · 第 {{ currentPage }} / {{ pageTotal }} 页
+            {{ t('history.totalRows', { n: rules.length }) }} · {{ t('history.page', { current: currentPage, total: pageTotal }) }}
           </span>
           <div class="flex gap-1">
             <Button
@@ -265,13 +265,13 @@ onMounted(reload)
               size="sm"
               :disabled="currentPage <= 1"
               @click="currentPage--"
-            >上一页</Button>
+            >{{ t('history.prevPage') }}</Button>
             <Button
               variant="outline"
               size="sm"
               :disabled="currentPage >= pageTotal"
               @click="currentPage++"
-            >下一页</Button>
+            >{{ t('history.nextPage') }}</Button>
           </div>
         </div>
       </div>
@@ -310,7 +310,7 @@ onMounted(reload)
               <span class="font-mono text-xs">{{ durationOf(r) }}</span>
             </div>
             <div class="flex flex-col gap-0.5 min-w-0">
-              <span class="text-[11px] text-muted-foreground">用户</span>
+              <span class="text-[11px] text-muted-foreground">{{ t('history.user') }}</span>
               <span class="text-xs">{{ r.created_by || '-' }}</span>
             </div>
             <div class="flex flex-col gap-0.5 min-w-0">
@@ -335,8 +335,8 @@ onMounted(reload)
             {{ currentPage }} / {{ pageTotal }}
           </span>
           <div class="flex gap-1">
-            <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="currentPage--">上一页</Button>
-            <Button variant="outline" size="sm" :disabled="currentPage >= pageTotal" @click="currentPage++">下一页</Button>
+            <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="currentPage--">{{ t('history.prevPage') }}</Button>
+            <Button variant="outline" size="sm" :disabled="currentPage >= pageTotal" @click="currentPage++">{{ t('history.nextPage') }}</Button>
           </div>
         </div>
       </div>

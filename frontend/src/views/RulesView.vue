@@ -102,9 +102,9 @@ function protoVariant(p: string) {
       <div>
         <h1 class="text-xl font-semibold text-foreground m-0">{{ t('rules.title') }}</h1>
         <p class="text-sm text-muted-foreground mt-1 m-0">
-          共 <strong class="text-foreground">{{ store.active.length }}</strong> 条生效中
+          {{ t('rules.subtitle', { n: store.active.length }) }}
           <span v-if="search && filtered.length !== store.active.length">
-            · 当前显示 {{ filtered.length }} 条
+            · {{ t('rules.filteredHint', { n: filtered.length }) }}
           </span>
         </p>
       </div>
@@ -113,7 +113,7 @@ function protoVariant(p: string) {
           <SearchIcon class="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
           <Input
             v-model="search"
-            placeholder="按端口 / IP / 备注 / 用户名搜索"
+            :placeholder="t('rules.searchPlaceholder')"
             class="pl-8 h-9"
           />
         </div>
@@ -141,9 +141,9 @@ function protoVariant(p: string) {
       <!-- Empty -->
       <EmptyState
         v-else-if="!filtered.length && !search"
-        icon="🛡️"
-        title="暂时没有生效中的规则"
-        description="你可以从首页快速创建一条临时端口规则，到期后会自动撤销。"
+          icon="🛡️"
+          :title="t('rules.emptyTitle')"
+          :description="t('rules.emptyDesc')"
       >
         <template #action>
           <Button @click="router.push({ name: 'home' })">
@@ -155,9 +155,9 @@ function protoVariant(p: string) {
 
       <EmptyState
         v-else-if="!filtered.length && search"
-        icon="🔍"
-        title="没有匹配的规则"
-        :description="`没有规则匹配 ${search}，试试换个关键词。`"
+          icon="🔍"
+          :title="t('rules.noMatch')"
+          :description="t('rules.noMatchDesc', { q: search })"
       />
 
       <!-- Desktop table -->
@@ -170,7 +170,7 @@ function protoVariant(p: string) {
               <TableHead class="w-[170px]">{{ t('rules.port') }} / {{ t('rules.protocol') }}</TableHead>
               <TableHead class="w-[140px]">{{ t('rules.remaining') }}</TableHead>
               <TableHead class="w-[130px]">{{ t('rules.createdAt') }}</TableHead>
-              <TableHead class="w-[100px]">用户</TableHead>
+              <TableHead class="w-[100px]">{{ t('rules.user') }}</TableHead>
               <TableHead>{{ t('rules.note') }}</TableHead>
               <TableHead class="w-[120px] text-right">{{ t('rules.actions') }}</TableHead>
             </TableRow>
@@ -288,7 +288,7 @@ function protoVariant(p: string) {
               <span class="font-mono text-xs">{{ dayjs(r.created_at).format('MM-DD HH:mm') }}</span>
             </div>
             <div class="flex flex-col gap-0.5 min-w-0">
-              <span class="text-[11px] text-muted-foreground">用户</span>
+              <span class="text-[11px] text-muted-foreground">{{ t('rules.user') }}</span>
               <span class="text-xs">{{ r.created_by || '-' }}</span>
             </div>
           </div>

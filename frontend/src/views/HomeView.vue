@@ -242,9 +242,6 @@ const sourceOptions = computed<SourceOpt[]>(() => [
             <span v-if="ipLoading" class="inline-block w-28 h-4 rounded bg-muted animate-pulse" />
             <CopyableText v-else :value="clientIP || '—'" mono />
           </div>
-          <div class="text-[11px] text-muted-foreground mt-0.5">
-            {{ t('home.clientIPSub') }}
-          </div>
         </div>
       </div>
     </section>

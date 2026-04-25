@@ -170,9 +170,11 @@ async function doRemovePreset() {
 
 function fmtDuration(sec: number): string {
   if (!sec) return '—'
-  if (sec < 60) return sec + ' 秒'
-  if (sec < 3600) return Math.floor(sec / 60) + ' 分钟'
-  return Math.floor(sec / 3600) + ' 小时' + (sec % 3600 > 0 ? Math.floor((sec % 3600) / 60) + '分' : '')
+  if (sec < 60) return sec + t('unit.seconds')
+  if (sec < 3600) return Math.floor(sec / 60) + t('unit.minutes')
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  return h + t('unit.hours') + (m > 0 ? m + t('unit.minutes') : '')
 }
 
 const presetCount = computed(() => presets.value.length)
@@ -242,7 +244,15 @@ function strengthOf(v: string): { score: number; label: string } {
   if (/[A-Z]/.test(v) && /[a-z]/.test(v)) s++
   if (/\d/.test(v)) s++
   if (/[^A-Za-z0-9]/.test(v)) s++
-  return { score: s, label: ['', '太弱', '一般', '中等', '不错', '很强'][s] || '' }
+  const labels = [
+    '',
+    t('password.strength.weak'),
+    t('password.strength.fair'),
+    t('password.strength.medium'),
+    t('password.strength.good'),
+    t('password.strength.strong')
+  ]
+  return { score: s, label: labels[s] || '' }
 }
 
 const userCreateModal = ref(false)
@@ -405,7 +415,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
     <header class="flex items-end justify-between gap-4 flex-wrap">
       <div>
         <h1 class="text-xl font-semibold text-foreground m-0">{{ t('settings.title') }}</h1>
-        <p class="text-sm text-muted-foreground mt-1 m-0">用户、预设端口、受保护端口与运行时参数</p>
+        <p class="text-sm text-muted-foreground mt-1 m-0">{{ t('settings.subtitle') }}</p>
       </div>
       <Button variant="outline" size="sm" :disabled="loading" @click="reload">
         <RefreshCw :class="['size-4', loading && 'animate-spin']" />
@@ -420,7 +430,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           <ShieldCheck class="size-5" />
         </div>
         <div class="min-w-0">
-          <div class="text-xs text-muted-foreground">鉴权模式</div>
+          <div class="text-xs text-muted-foreground">{{ t('settings.overviewAuth') }}</div>
           <div class="text-sm md:text-base font-semibold truncate">{{ settings.auth_mode }}</div>
         </div>
       </div>
@@ -429,7 +439,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           <Cog class="size-5" />
         </div>
         <div class="min-w-0">
-          <div class="text-xs text-muted-foreground">防火墙驱动</div>
+          <div class="text-xs text-muted-foreground">{{ t('settings.overviewFirewall') }}</div>
           <div class="text-sm md:text-base font-semibold truncate">{{ settings.firewall_driver }}</div>
         </div>
       </div>
@@ -438,8 +448,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           <Clock class="size-5" />
         </div>
         <div class="min-w-0">
-          <div class="text-xs text-muted-foreground">单条规则上限</div>
-          <div class="text-sm md:text-base font-semibold truncate">{{ settings.max_duration_hours }} 小时</div>
+          <div class="text-xs text-muted-foreground">{{ t('settings.overviewMaxDuration') }}</div>
+          <div class="text-sm md:text-base font-semibold truncate">{{ settings.max_duration_hours }} {{ t('settings.overviewHours') }}</div>
         </div>
       </div>
       <div class="rounded-md border border-border bg-card p-3 md:p-4 flex items-center gap-3">
@@ -447,8 +457,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           <Database class="size-5" />
         </div>
         <div class="min-w-0">
-          <div class="text-xs text-muted-foreground">历史保留</div>
-          <div class="text-sm md:text-base font-semibold truncate">{{ settings.history_retention_days }} 天</div>
+          <div class="text-xs text-muted-foreground">{{ t('settings.overviewRetention') }}</div>
+          <div class="text-sm md:text-base font-semibold truncate">{{ settings.history_retention_days }} {{ t('settings.overviewDays') }}</div>
         </div>
       </div>
     </section>
@@ -459,30 +469,30 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
         <TabsTrigger value="users" class="gap-1.5">
           <UsersIcon class="size-3.5" />
           <span class="hidden sm:inline">{{ t('settings.tabUsers') }}</span>
-          <span class="sm:hidden">用户</span>
+          <span class="sm:hidden">{{ t('settings.tabUsersMobile') }}</span>
           <Badge variant="default" class="text-[10px] h-4 px-1.5 ml-0.5">{{ users.length }}</Badge>
         </TabsTrigger>
         <TabsTrigger value="presets" class="gap-1.5">
           <Package class="size-3.5" />
           <span class="hidden sm:inline">{{ t('settings.tabPresets') }}</span>
-          <span class="sm:hidden">预设</span>
+          <span class="sm:hidden">{{ t('settings.tabPresetsMobile') }}</span>
           <Badge variant="default" class="text-[10px] h-4 px-1.5 ml-0.5">{{ presetCount }}</Badge>
         </TabsTrigger>
         <TabsTrigger value="protected" class="gap-1.5">
           <AlertTriangle class="size-3.5" />
           <span class="hidden sm:inline">{{ t('settings.tabProtected') }}</span>
-          <span class="sm:hidden">受保护</span>
+          <span class="sm:hidden">{{ t('settings.tabProtectedMobile') }}</span>
           <Badge variant="destructive" class="text-[10px] h-4 px-1.5 ml-0.5">{{ protectedPorts.length }}</Badge>
         </TabsTrigger>
         <TabsTrigger value="security" class="gap-1.5">
           <History class="size-3.5" />
           <span class="hidden sm:inline">{{ t('security.title') }}</span>
-          <span class="sm:hidden">登录</span>
+          <span class="sm:hidden">{{ t('settings.tabSecurityMobile') }}</span>
         </TabsTrigger>
         <TabsTrigger value="runtime" class="gap-1.5">
           <SettingsIcon class="size-3.5" />
           <span class="hidden sm:inline">{{ t('settings.tabRuntime') }}</span>
-          <span class="sm:hidden">运行时</span>
+          <span class="sm:hidden">{{ t('settings.tabRuntimeMobile') }}</span>
         </TabsTrigger>
       </TabsList>
 
@@ -490,8 +500,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       <TabsContent value="users" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">
-            共 <strong class="text-foreground">{{ users.length }}</strong> 个账号 ·
-            启用中管理员 <strong class="text-foreground">{{ activeAdminCount }}</strong>
+            {{ t('settings.usersCount', { n: users.length }) }} ·
+            {{ t('settings.activeAdmins', { n: activeAdminCount }) }}
           </p>
           <Button @click="openUserCreate">
             <Plus class="size-4" />
@@ -502,8 +512,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
         <EmptyState
           v-if="!users.length && !loading"
           icon="👥"
-          title="还没有任何用户"
-          description="点击右上角『新建用户』创建第一个普通用户。"
+          :title="t('settings.usersEmpty')"
+          :description="t('settings.usersEmptyDesc')"
         />
 
         <!-- Desktop table -->
@@ -531,7 +541,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
                     <div class="flex flex-col min-w-0">
                       <div class="text-sm font-medium text-foreground flex items-center gap-1.5">
                         <span class="truncate">{{ u.username }}</span>
-                        <Badge v-if="isSelf(u)" variant="default" class="text-[10px] h-4 px-1.5">你</Badge>
+                        <Badge v-if="isSelf(u)" variant="default" class="text-[10px] h-4 px-1.5">{{ t('users.you') }}</Badge>
                       </div>
                       <div class="text-[11px] text-muted-foreground">ID #{{ u.id }}</div>
                     </div>
@@ -597,7 +607,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        {{ isSelf(u) ? '不能删除自己' : t('action.delete') }}
+                        {{ isSelf(u) ? t('users.selfCannotModify') : t('action.delete') }}
                       </TooltipContent>
                     </Tooltip>
                   </div>
@@ -624,7 +634,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
               <div class="flex flex-col min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <span class="font-medium text-foreground truncate">{{ u.username }}</span>
-                  <Badge v-if="isSelf(u)" variant="default" class="text-[10px] h-4 px-1.5">你</Badge>
+                  <Badge v-if="isSelf(u)" variant="default" class="text-[10px] h-4 px-1.5">{{ t('users.you') }}</Badge>
                 </div>
                 <div class="flex items-center gap-1.5 mt-1">
                   <Badge
@@ -680,20 +690,19 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       <TabsContent value="presets" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">
-            普通用户仅能在勾选了"普通用户可用"的端口上创建规则，
-            <strong class="text-foreground">{{ userAllowedCount }}</strong> / {{ presetCount }} 个预设当前对普通用户可见。
+            {{ t('settings.presetHint') }}，{{ t('settings.presetVisibility', { allowed: userAllowedCount, total: presetCount }) }}
           </p>
           <Button @click="openPresetCreate">
             <Plus class="size-4" />
-            {{ locale === 'zh-CN' ? '新建预设' : 'New preset' }}
+            {{ t('settings.newPreset') }}
           </Button>
         </div>
 
         <EmptyState
           v-if="!presets.length && !loading"
           icon="📭"
-          title="还没有预设端口"
-          description="预设可以让首页的用户一键选择常用端口，建议至少配置 SSH / HTTP / HTTPS。"
+          :title="t('settings.presetsEmpty')"
+          :description="t('settings.presetsEmptyDesc')"
         />
 
         <!-- Desktop table -->
@@ -701,11 +710,11 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           <Table>
             <TableHeader>
               <TableRow class="bg-muted/50 hover:bg-muted/50">
-                <TableHead class="w-[220px]">名称</TableHead>
-                <TableHead>端口集 / 协议</TableHead>
+                <TableHead class="w-[220px]">{{ t('settings.presetName') }}</TableHead>
+                <TableHead>{{ t('settings.presetPortsProto') }}</TableHead>
                 <TableHead class="w-[140px]">{{ t('settings.userAllowed') }}</TableHead>
                 <TableHead class="w-[160px]">{{ t('settings.maxDurationSec') }}</TableHead>
-                <TableHead class="w-[80px] text-center">排序</TableHead>
+                <TableHead class="w-[80px] text-center">{{ t('settings.presetSort') }}</TableHead>
                 <TableHead class="w-[100px] text-right">{{ t('rules.actions') }}</TableHead>
               </TableRow>
             </TableHeader>
@@ -726,10 +735,10 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Badge v-if="p.user_allowed" variant="success" class="text-[11px]">可用</Badge>
+                  <Badge v-if="p.user_allowed" variant="success" class="text-[11px]">{{ t('settings.presetAvailable') }}</Badge>
                   <Badge v-else variant="muted" class="text-[11px] gap-1">
                     <Lock class="size-3" />
-                    仅管理员
+                    {{ t('settings.presetAdminOnly') }}
                   </Badge>
                 </TableCell>
                 <TableCell>
@@ -775,8 +784,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
             <div class="grid grid-cols-2 gap-y-1.5 gap-x-4 text-sm">
               <div class="flex flex-col gap-0.5">
                 <span class="text-[11px] text-muted-foreground">{{ t('settings.userAllowed') }}</span>
-                <Badge v-if="p.user_allowed" variant="success" class="text-[10px] w-fit">可用</Badge>
-                <Badge v-else variant="muted" class="text-[10px] w-fit">仅管理员</Badge>
+                <Badge v-if="p.user_allowed" variant="success" class="text-[10px] w-fit">{{ t('settings.presetAvailable') }}</Badge>
+                <Badge v-else variant="muted" class="text-[10px] w-fit">{{ t('settings.presetAdminOnly') }}</Badge>
               </div>
               <div class="flex flex-col gap-0.5">
                 <span class="text-[11px] text-muted-foreground">{{ t('settings.maxDurationSec') }}</span>
@@ -808,7 +817,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       <TabsContent value="protected" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">
-            用于保护本机已被业务占用的端口；任何账户（含管理员）都不能临时开放。
+            {{ t('settings.protectedHint') }}
           </p>
           <Button @click="openProtectedCreate">
             <Plus class="size-4" />
@@ -1004,19 +1013,17 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       <DialogContent class="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {{ isEditingPreset
-              ? (locale === 'zh-CN' ? '编辑预设' : 'Edit preset')
-              : (locale === 'zh-CN' ? '新建预设' : 'New preset') }}
+            {{ isEditingPreset ? t('settings.editPreset') : t('settings.newPreset') }}
           </DialogTitle>
         </DialogHeader>
         <div class="flex flex-col gap-4">
           <div class="grid grid-cols-3 gap-3">
             <div class="col-span-2 flex flex-col gap-1.5">
-              <Label>名称</Label>
-              <Input v-model="presetEditing.name" placeholder="例如 SSH" />
+              <Label>{{ t('settings.presetName') }}</Label>
+              <Input v-model="presetEditing.name" :placeholder="locale === 'zh-CN' ? '例如 SSH' : 'e.g. SSH'" />
             </div>
             <div class="flex flex-col gap-1.5">
-              <Label>排序</Label>
+              <Label>{{ t('settings.presetSort') }}</Label>
               <Input
                 v-model="presetEditing.sort"
                 type="number"
@@ -1026,7 +1033,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
             </div>
           </div>
           <div class="flex flex-col gap-1.5">
-            <Label>端口集</Label>
+            <Label>{{ t('settings.presetPorts') }}</Label>
             <PortSetInput
               v-model="presetEditing.ports as string"
               :placeholder="t('portSet.placeholder')"
@@ -1034,7 +1041,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
             />
           </div>
           <div class="flex flex-col gap-1.5">
-            <Label>协议</Label>
+            <Label>{{ t('settings.presetProtocol') }}</Label>
             <div class="inline-flex p-1 rounded-md bg-muted/60 border border-border w-fit">
               <button
                 v-for="p in protocolOptions"
@@ -1135,7 +1142,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
         <div class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
             <Label>{{ t('users.username') }}</Label>
-            <Input v-model="userCreateForm.username" autocomplete="off" placeholder="例如 alice" />
+            <Input v-model="userCreateForm.username" autocomplete="off" :placeholder="locale === 'zh-CN' ? '例如 alice' : 'e.g. alice'" />
           </div>
           <div class="flex flex-col gap-1.5">
             <Label>{{ t('password.new') }}</Label>
