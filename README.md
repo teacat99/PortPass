@@ -45,15 +45,13 @@ go build -trimpath -ldflags="-s -w" -o portpass ./cmd/server/
 PORTPASS_ADMIN_PASSWORD=dev ./portpass
 ```
 
-## 远程仓库
+## 镜像与代码
 
-- **当前状态**：仅本地仓库，暂未关联远程
-- **建议远端**：`github.com/teacat99/PortPass`
-- 开通远程仓库后：
-  ```bash
-  git remote add origin git@github.com:teacat99/PortPass.git
-  git push -u origin main
-  ```
+- **代码**：[github.com/teacat99/PortPass](https://github.com/teacat99/PortPass)
+- **镜像（推荐）**：
+  - Docker Hub：`teacat99/portpass:latest`
+  - GHCR：`ghcr.io/teacat99/portpass:latest`
+- **发版规则**：以 `vX.Y.Z` tag 触发 GitHub Actions，自动构建 `linux/amd64` + `linux/arm64` 镜像并推送到上述两个仓库
 
 ## 核心特性
 
