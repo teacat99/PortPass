@@ -484,7 +484,7 @@ const sourceOptions = computed<SourceOpt[]>(() => [
     <!-- Mobile sticky submit bar -->
     <div class="md:hidden h-16" aria-hidden="true" />
     <div
-      class="md:hidden fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom,0px))] z-40 p-3 bg-card border-t border-border shadow-[0_-4px_12px_rgba(15,23,42,0.06)]"
+      class="md:hidden fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px))] z-40 p-3 bg-card border-t border-border shadow-[0_-4px_12px_rgba(15,23,42,0.06)]"
     >
       <Button
         size="lg"

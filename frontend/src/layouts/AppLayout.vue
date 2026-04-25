@@ -269,7 +269,7 @@ async function submitPassword() {
       </div>
     </header>
 
-    <main class="flex-1 min-w-0 max-w-7xl w-full mx-auto px-3 md:px-6 py-4 md:py-6 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] md:pb-6">
+    <main class="flex-1 min-w-0 max-w-7xl w-full mx-auto px-3 md:px-6 py-4 md:py-6 pb-[calc(3.5rem+env(safe-area-inset-bottom,0px))] md:pb-6">
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in">
           <component :is="Component" />
