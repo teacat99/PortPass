@@ -29,7 +29,7 @@ RUN CGO_ENABLED=0 go build \
       ./cmd/server/
 
 # ---- Stage 3: runtime ----
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache \
       ca-certificates \
       tzdata \
