@@ -18,7 +18,7 @@ const resolvedTheme = computed<ToasterProps['theme']>(() =>
   <Toaster
     v-bind="props"
     :theme="resolvedTheme"
-    position="top-right"
+    position="top-left"
     rich-colors
     close-button
     :toast-options="{

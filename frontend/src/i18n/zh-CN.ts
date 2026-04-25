@@ -3,6 +3,16 @@ export default {
     title: 'PortPass',
     subtitle: '按需临时开放服务器端口'
   },
+  theme: {
+    light: '浅色模式',
+    dark: '深色模式',
+    auto: '跟随系统',
+    switchTo: {
+      light: '切换到浅色',
+      dark: '切换到深色',
+      auto: '切换到跟随系统'
+    }
+  },
   menu: {
     home: '首页',
     rules: '规则',

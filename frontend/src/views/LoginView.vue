@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
+import { Eye, EyeOff } from 'lucide-vue-next'
 import { fetchCaptcha } from '@/api/auth'
 
 const { t, locale } = useI18n()
@@ -23,6 +24,7 @@ function toggleLocale() {
 
 const username = ref('')
 const password = ref('')
+const showPassword = ref(false)
 const loading = ref(false)
 
 // Captcha state. The backend asks for a math challenge once it's seen
@@ -218,15 +220,26 @@ async function submit(e?: Event) {
 
         <div class="flex flex-col gap-1.5">
           <Label for="login-password">{{ t('login.password') }}</Label>
-          <Input
-            id="login-password"
-            v-model="password"
-            type="password"
-            :placeholder="t('login.passwordPlaceholder')"
-            autocomplete="current-password"
-            class="h-11 text-base"
-            @keydown.enter="submit"
-          />
+          <div class="relative">
+            <Input
+              id="login-password"
+              v-model="password"
+              :type="showPassword ? 'text' : 'password'"
+              :placeholder="t('login.passwordPlaceholder')"
+              autocomplete="current-password"
+              class="h-11 text-base pr-10"
+              @keydown.enter="submit"
+            />
+            <button
+              type="button"
+              tabindex="-1"
+              class="absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors"
+              @click="showPassword = !showPassword"
+            >
+              <EyeOff v-if="showPassword" class="size-4" />
+              <Eye v-else class="size-4" />
+            </button>
+          </div>
         </div>
 
         <div v-if="captchaRequired" class="flex flex-col gap-1.5">

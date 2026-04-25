@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#165dff" />
+    <meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f1216" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="PortPass — 按需临时开放服务器端口的自助管理工具" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
@@ -16,12 +17,11 @@
         try {
           var v = localStorage.getItem('portpass.theme');
           var dark = v === 'dark' || (v !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-          if (dark) {
-            document.documentElement.classList.add('dark');
-            document.documentElement.style.background = '#0f1216';
-          } else {
-            document.documentElement.style.background = '#f6f8fb';
-          }
+          var c = dark ? '#0f1216' : '#f6f8fb';
+          if (dark) document.documentElement.classList.add('dark');
+          document.documentElement.style.background = c;
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', c);
         } catch (e) {}
       })();
     </script>

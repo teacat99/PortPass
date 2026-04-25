@@ -42,8 +42,9 @@ export const useThemeStore = defineStore('theme', () => {
       root.classList.remove('dark')
     }
     // Drive the browser chrome colour (status bar / address bar) too.
-    const meta = document.querySelector('meta[name="theme-color"]')
-    if (meta) meta.setAttribute('content', isDark.value ? '#0f1216' : '#165dff')
+    document.querySelectorAll('meta[name="theme-color"]').forEach(meta => {
+      meta.setAttribute('content', isDark.value ? '#0f1216' : '#f6f8fb')
+    })
   }
 
   function setMode(next: ThemeMode) {
@@ -52,9 +53,9 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function toggle() {
-    // Two-state toggle ignores "auto" and snaps to the opposite of what is
-    // currently rendered.
-    setMode(isDark.value ? 'light' : 'dark')
+    const order: ThemeMode[] = ['auto', 'light', 'dark']
+    const idx = order.indexOf(mode.value)
+    setMode(order[(idx + 1) % 3])
   }
 
   function init() {

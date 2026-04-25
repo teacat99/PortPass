@@ -11,7 +11,10 @@ import {
   User as UserIcon,
   Lock,
   Moon,
-  Sun
+  Sun,
+  SunMoon,
+  Eye,
+  EyeOff
 } from 'lucide-vue-next'
 import LanguageIcon from '@/components/LanguageIcon.vue'
 import { setLocale } from '@/i18n'
@@ -52,6 +55,9 @@ const theme = useThemeStore()
 const pwdModal = ref(false)
 const pwdSubmitting = ref(false)
 const pwdForm = ref({ old_password: '', new_password: '', confirm: '' })
+const showPwdOld = ref(false)
+const showPwdNew = ref(false)
+const showPwdConfirm = ref(false)
 
 onMounted(async () => {
   await auth.refreshStatus()
@@ -107,6 +113,9 @@ function logout() {
 
 function openPasswordModal() {
   pwdForm.value = { old_password: '', new_password: '', confirm: '' }
+  showPwdOld.value = false
+  showPwdNew.value = false
+  showPwdConfirm.value = false
   pwdModal.value = true
 }
 
@@ -194,12 +203,13 @@ async function submitPassword() {
         <Tooltip>
           <TooltipTrigger as-child>
             <Button variant="ghost" size="icon" aria-label="theme" @click="theme.toggle()">
-              <Sun v-if="theme.isDark" />
+              <SunMoon v-if="theme.mode === 'auto'" />
+              <Sun v-else-if="theme.mode === 'light'" />
               <Moon v-else />
             </Button>
           </TooltipTrigger>
           <TooltipContent>
-            {{ theme.isDark ? '切换到浅色' : '切换到深色' }}
+            {{ theme.mode === 'auto' ? t('theme.switchTo.light') : theme.mode === 'light' ? t('theme.switchTo.dark') : t('theme.switchTo.auto') }}
           </TooltipContent>
         </Tooltip>
 
@@ -309,19 +319,33 @@ async function submitPassword() {
         <div class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
             <Label>{{ t('password.old') }}</Label>
-            <Input
-              v-model="pwdForm.old_password"
-              type="password"
-              autocomplete="current-password"
-            />
+            <div class="relative">
+              <Input
+                v-model="pwdForm.old_password"
+                :type="showPwdOld ? 'text' : 'password'"
+                autocomplete="current-password"
+                class="pr-10"
+              />
+              <button type="button" tabindex="-1" class="absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors" @click="showPwdOld = !showPwdOld">
+                <EyeOff v-if="showPwdOld" class="size-4" />
+                <Eye v-else class="size-4" />
+              </button>
+            </div>
           </div>
           <div class="flex flex-col gap-1.5">
             <Label>{{ t('password.new') }}</Label>
-            <Input
-              v-model="pwdForm.new_password"
-              type="password"
-              autocomplete="new-password"
-            />
+            <div class="relative">
+              <Input
+                v-model="pwdForm.new_password"
+                :type="showPwdNew ? 'text' : 'password'"
+                autocomplete="new-password"
+                class="pr-10"
+              />
+              <button type="button" tabindex="-1" class="absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors" @click="showPwdNew = !showPwdNew">
+                <EyeOff v-if="showPwdNew" class="size-4" />
+                <Eye v-else class="size-4" />
+              </button>
+            </div>
             <div v-if="pwdForm.new_password" class="flex items-center gap-2 mt-1">
               <div class="flex gap-0.5 flex-1">
                 <span
@@ -336,11 +360,18 @@ async function submitPassword() {
           </div>
           <div class="flex flex-col gap-1.5">
             <Label>{{ t('password.confirm') }}</Label>
-            <Input
-              v-model="pwdForm.confirm"
-              type="password"
-              autocomplete="new-password"
-            />
+            <div class="relative">
+              <Input
+                v-model="pwdForm.confirm"
+                :type="showPwdConfirm ? 'text' : 'password'"
+                autocomplete="new-password"
+                class="pr-10"
+              />
+              <button type="button" tabindex="-1" class="absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground hover:text-foreground transition-colors" @click="showPwdConfirm = !showPwdConfirm">
+                <EyeOff v-if="showPwdConfirm" class="size-4" />
+                <Eye v-else class="size-4" />
+              </button>
+            </div>
           </div>
         </div>
         <DialogFooter>

@@ -22,8 +22,8 @@ export default defineConfig({
         name: 'PortPass',
         short_name: 'PortPass',
         description: 'Temporary firewall port opener',
-        theme_color: '#165dff',
-        background_color: '#ffffff',
+        theme_color: '#f6f8fb',
+        background_color: '#f6f8fb',
         display: 'standalone',
         start_url: '/',
         icons: [

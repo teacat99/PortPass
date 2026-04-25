@@ -3,6 +3,16 @@ export default {
     title: 'PortPass',
     subtitle: 'On-demand server port opener'
   },
+  theme: {
+    light: 'Light',
+    dark: 'Dark',
+    auto: 'System',
+    switchTo: {
+      light: 'Switch to light',
+      dark: 'Switch to dark',
+      auto: 'Switch to system'
+    }
+  },
   menu: {
     home: 'Home',
     rules: 'Rules',
