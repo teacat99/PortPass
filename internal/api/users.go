@@ -95,6 +95,21 @@ func (s *Server) ensureAdmin(c *gin.Context) bool {
 	return true
 }
 
+// minPasswordLen reads the live runtime value when configured, falling
+// back to the env-loaded cfg, then to the package-level safety floor.
+// Centralising here means new callers cannot forget the precedence rule.
+func (s *Server) minPasswordLen() int {
+	if s.rt != nil {
+		if n := s.rt.LoginMinPasswordLen(); n > 0 {
+			return n
+		}
+	}
+	if s.cfg != nil && s.cfg.LoginMinPasswordLen > 0 {
+		return s.cfg.LoginMinPasswordLen
+	}
+	return minPasswordLen
+}
+
 // currentUserID pulls the authenticated user id from the context. Used
 // when scoping list/create operations to the caller.
 func currentUserID(c *gin.Context) uint {
@@ -128,7 +143,7 @@ func (s *Server) handleChangeOwnPassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := validatePassword(req.NewPassword, s.cfg.LoginMinPasswordLen); err != nil {
+	if err := validatePassword(req.NewPassword, s.minPasswordLen()); err != nil {
 		respondPasswordPolicy(c, err)
 		return
 	}
@@ -259,7 +274,7 @@ func (s *Server) handleCreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "username required"})
 		return
 	}
-	if err := validatePassword(req.Password, s.cfg.LoginMinPasswordLen); err != nil {
+	if err := validatePassword(req.Password, s.minPasswordLen()); err != nil {
 		respondPasswordPolicy(c, err)
 		return
 	}
@@ -378,6 +393,18 @@ func (s *Server) handleUpdateUser(c *gin.Context) {
 		Action: "update_user", Actor: actor, ActorIP: s.clientIP(c),
 		Detail: fmt.Sprintf("id=%d role=%s disabled=%v", id, newRole, newDisabled),
 	})
+	// Notify the operator when an account flips disabled state. We
+	// only fire on the boundary so a no-op PUT (same values resent
+	// from the UI) does not spam the channel.
+	if s.notify != nil && req.Disabled != nil && newDisabled != target.Disabled {
+		title := "PortPass · 账号已启用"
+		tag := "white_check_mark"
+		if newDisabled {
+			title = "PortPass · 账号已禁用"
+			tag = "no_entry_sign"
+		}
+		s.notify.Notify(title, fmt.Sprintf("用户 %s 由 %s 操作", target.Username, actor), tag)
+	}
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -399,7 +426,7 @@ func (s *Server) handleResetUserPassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := validatePassword(req.NewPassword, s.cfg.LoginMinPasswordLen); err != nil {
+	if err := validatePassword(req.NewPassword, s.minPasswordLen()); err != nil {
 		respondPasswordPolicy(c, err)
 		return
 	}

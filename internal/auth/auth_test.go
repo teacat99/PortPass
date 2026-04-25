@@ -66,6 +66,31 @@ func (r *fakeUserRepo) CountLoginFailuresByIP(ip string, since time.Time) (int64
 	return n, nil
 }
 
+func (r *fakeUserRepo) CountLoginFailuresByIPSubnet(prefix string, since time.Time) (int64, error) {
+	parts := strings.SplitN(prefix, "/", 2)
+	if len(parts) != 2 {
+		return 0, nil
+	}
+	_, n4, err := net.ParseCIDR(prefix)
+	if err != nil || n4 == nil {
+		return 0, nil
+	}
+	var n int64
+	for _, a := range r.attempts {
+		if a.Success || a.CreatedAt.Before(since) {
+			continue
+		}
+		ip := net.ParseIP(a.ClientIP)
+		if ip == nil {
+			continue
+		}
+		if n4.Contains(ip) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (r *fakeUserRepo) CountLoginFailuresByUsername(username string, since time.Time) (int64, error) {
 	var n int64
 	for _, a := range r.attempts {
@@ -107,7 +132,7 @@ func newEngine(a *Authenticator) *gin.Engine {
 func TestPasswordMode_LoginFlow(t *testing.T) {
 	cfg := &config.Config{AuthMode: config.AuthModePassword, AdminUsername: "admin"}
 	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
-	a := New(cfg, newFakeRepo(admin))
+	a := New(cfg, nil, newFakeRepo(admin))
 	r := newEngine(a)
 
 	// unauthenticated -> 401
@@ -177,7 +202,7 @@ func TestPasswordMode_DisabledUserRejected(t *testing.T) {
 	cfg := &config.Config{AuthMode: config.AuthModePassword, AdminUsername: "admin"}
 	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
 	disabled := &model.User{ID: 2, Username: "alice", PasswordHash: hash("s3cret"), Role: model.RoleUser, Disabled: true}
-	a := New(cfg, newFakeRepo(admin, disabled))
+	a := New(cfg, nil, newFakeRepo(admin, disabled))
 	r := newEngine(a)
 
 	w := httptest.NewRecorder()
@@ -195,7 +220,7 @@ func TestIPWhitelistMode_SystemAdminPrincipal(t *testing.T) {
 		AdminIPWhitelist: []*net.IPNet{mustCIDR("10.0.0.0/24")},
 	}
 	admin := &model.User{ID: 7, Username: "sys", Role: model.RoleAdmin}
-	a := New(cfg, newFakeRepo(admin))
+	a := New(cfg, nil, newFakeRepo(admin))
 	a.SetSystemAdmin(admin.ID, admin.Username)
 	r := newEngine(a)
 
@@ -236,7 +261,7 @@ func TestPasswordMode_IPLockout(t *testing.T) {
 		LoginLockoutIPMin:      10,
 	}
 	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
-	a := New(cfg, newFakeRepo(admin))
+	a := New(cfg, nil, newFakeRepo(admin))
 	r := newEngine(a)
 
 	bad := strings.NewReader(``)
@@ -284,7 +309,7 @@ func TestPasswordMode_UsernameLockout(t *testing.T) {
 		LoginLockoutUserMin:    15,
 	}
 	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
-	a := New(cfg, newFakeRepo(admin))
+	a := New(cfg, nil, newFakeRepo(admin))
 	r := newEngine(a)
 
 	// Two failed attempts from different IPs - simulating a proxy pool -
@@ -315,7 +340,7 @@ func TestPasswordMode_UsernameLockout(t *testing.T) {
 func TestPasswordMode_LastLoginReturned(t *testing.T) {
 	cfg := &config.Config{AuthMode: config.AuthModePassword, AdminUsername: "admin"}
 	admin := &model.User{ID: 1, Username: "admin", PasswordHash: hash("secret"), Role: model.RoleAdmin}
-	a := New(cfg, newFakeRepo(admin))
+	a := New(cfg, nil, newFakeRepo(admin))
 	r := newEngine(a)
 
 	// First login: no prior record, no last_login in response.
@@ -358,7 +383,7 @@ func TestPasswordMode_LastLoginReturned(t *testing.T) {
 func TestNoneMode_SystemAdminPrincipal(t *testing.T) {
 	cfg := &config.Config{AuthMode: config.AuthModeNone}
 	admin := &model.User{ID: 42, Username: "system", Role: model.RoleAdmin}
-	a := New(cfg, newFakeRepo(admin))
+	a := New(cfg, nil, newFakeRepo(admin))
 	a.SetSystemAdmin(admin.ID, admin.Username)
 	r := newEngine(a)
 	w := httptest.NewRecorder()

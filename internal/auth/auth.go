@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/teacat99/PortPass/internal/config"
 	"github.com/teacat99/PortPass/internal/model"
 	"github.com/teacat99/PortPass/internal/netutil"
+	"github.com/teacat99/PortPass/internal/runtime"
 )
 
 // UserRepo captures the parts of the user store that the authenticator
@@ -29,16 +31,35 @@ type UserRepo interface {
 
 	RecordLoginAttempt(a *model.LoginAttempt) error
 	CountLoginFailuresByIP(ip string, since time.Time) (int64, error)
+	CountLoginFailuresByIPSubnet(ipPrefix string, since time.Time) (int64, error)
 	CountLoginFailuresByUsername(username string, since time.Time) (int64, error)
 	LastSuccessfulLogin(username string) (*model.LoginAttempt, error)
+}
+
+// CaptchaService verifies short-lived math-challenge solutions. The
+// auth handler does not care about the storage backing; we just want
+// to know "is this (id, answer) pair valid?". Keeping it as a tiny
+// interface avoids a circular dep with the api package.
+type CaptchaService interface {
+	Required(username, ip string) bool
+	Verify(id, answer string) bool
+}
+
+// Notifier is the optional async hook fired at security-sensitive
+// events (lockouts, account state changes). Pass nil to disable.
+type Notifier interface {
+	Notify(title, body, tag string)
 }
 
 // Authenticator bundles login and middleware logic for a specific AuthMode.
 // It is constructed once during server bootstrap and reused across requests.
 type Authenticator struct {
-	cfg    *config.Config
-	secret []byte
-	users  UserRepo
+	cfg     *config.Config
+	rt      *runtime.Settings
+	secret  []byte
+	users   UserRepo
+	captcha CaptchaService
+	notify  Notifier
 
 	// systemAdminID / systemAdminUsername identify the implicit actor for
 	// ipwhitelist / none modes. They are populated after the store seeds
@@ -64,20 +85,34 @@ const (
 	ReasonUserDisabled   = "user_disabled"
 	ReasonAuthDisabled   = "auth_disabled"
 	ReasonLockedIP       = "locked_ip"
+	ReasonLockedSubnet   = "locked_subnet"
 	ReasonLockedUser     = "locked_user"
+	ReasonCaptchaMissing = "captcha_required"
+	ReasonCaptchaWrong   = "captcha_wrong"
 	ReasonInternal       = "internal"
 )
 
 // New initialises an Authenticator. When no JWT secret is configured we
 // derive a random one so tokens from previous processes are invalidated
-// (acceptable for a single-admin self-hosted tool).
-func New(cfg *config.Config, users UserRepo) *Authenticator {
+// (acceptable for a single-admin self-hosted tool). Pass rt = nil to fall
+// back to env defaults from cfg (used by tests that don't exercise hot
+// reload); production callers should always supply a *runtime.Settings.
+func New(cfg *config.Config, rt *runtime.Settings, users UserRepo) *Authenticator {
 	secret := []byte(cfg.JWTSecret)
 	if len(secret) == 0 {
 		secret = randomSecret(32)
 	}
-	return &Authenticator{cfg: cfg, secret: secret, users: users}
+	if rt == nil {
+		rt = runtime.New(cfg)
+	}
+	return &Authenticator{cfg: cfg, rt: rt, secret: secret, users: users}
 }
+
+// SetCaptcha wires the optional captcha challenger. nil disables.
+func (a *Authenticator) SetCaptcha(svc CaptchaService) { a.captcha = svc }
+
+// SetNotifier wires the optional async push notifier. nil disables.
+func (a *Authenticator) SetNotifier(n Notifier) { a.notify = n }
 
 // SetSystemAdmin registers the built-in admin identity that non-password
 // modes should impersonate. Call once at bootstrap after SeedAdminIfEmpty.
@@ -171,16 +206,20 @@ func penaltyDelay(count int) time.Duration {
 // a signed JWT. Password auth is the only mode that exposes this endpoint.
 //
 // Brute-force defence: every attempt is recorded in login_attempts. Before
-// checking the password we reject requests whose client IP or submitted
-// username has already crossed the configured failure threshold within
-// the rolling window, answering 429 with a retry_after hint. Failed
-// attempts additionally get an exponential delay so scripted attackers
-// see their RPS collapse. All counters are persisted, so a server
-// restart does not wipe the attacker's state.
+// checking the password we reject requests whose client IP, IP subnet, or
+// submitted username has already crossed the configured failure threshold
+// within the rolling window, answering 429 with a retry_after hint. Once
+// the failure count for a target reaches the captcha threshold the
+// response also requires a math captcha. Failed attempts additionally
+// get an exponential delay so scripted attackers see their RPS collapse.
+// All counters are persisted, so a server restart does not wipe the
+// attacker's state.
 func (a *Authenticator) LoginHandler(c *gin.Context) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password" binding:"required"`
+		Username       string `json:"username"`
+		Password       string `json:"password" binding:"required"`
+		CaptchaID      string `json:"captcha_id"`
+		CaptchaAnswer  string `json:"captcha_answer"`
 	}
 	clientIP := netutil.ClientIP(c.Request, a.cfg.TrustedProxies)
 	userAgent := c.GetHeader("User-Agent")
@@ -209,38 +248,91 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 	}
 
 	// --- 1. IP lockout check -------------------------------------------------
-	if a.cfg.LoginFailMaxPerIP > 0 && a.cfg.LoginFailWindowIPMin > 0 {
-		since := time.Now().Add(-time.Duration(a.cfg.LoginFailWindowIPMin) * time.Minute)
+	if a.rt.LoginFailMaxPerIP() > 0 && a.rt.LoginFailWindowIPMin() > 0 {
+		since := time.Now().Add(-a.rt.LoginIPWindow())
 		n, err := a.users.CountLoginFailuresByIP(clientIP, since)
-		if err == nil && int(n) >= a.cfg.LoginFailMaxPerIP {
-			retry := a.cfg.LoginLockoutIPMin
+		if err == nil && int(n) >= a.rt.LoginFailMaxPerIP() {
+			retry := a.rt.LoginLockoutIPMin()
 			if retry <= 0 {
-				retry = a.cfg.LoginFailWindowIPMin
+				retry = a.rt.LoginFailWindowIPMin()
 			}
 			a.recordAttempt(username, clientIP, userAgent, ReasonLockedIP, false)
+			a.fire(ReasonLockedIP, username, clientIP)
 			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":              ReasonLockedIP,
-				"error":             "too many failed attempts from this address",
-				"retry_after_secs":  retry * 60,
+				"code":             ReasonLockedIP,
+				"error":            "too many failed attempts from this address",
+				"retry_after_secs": retry * 60,
 			})
 			return
 		}
 	}
 
+	// --- 1b. Subnet lockout (optional, off by default) ----------------------
+	if bits := a.rt.LoginFailSubnetBits(); bits > 0 && a.rt.LoginFailMaxPerIP() > 0 && a.rt.LoginFailWindowIPMin() > 0 {
+		if prefix, ok := subnetPrefix(clientIP, bits); ok {
+			since := time.Now().Add(-a.rt.LoginIPWindow())
+			n, err := a.users.CountLoginFailuresByIPSubnet(prefix, since)
+			// Subnet threshold is intentionally 3x the per-IP one to
+			// make the aggregate gate strictly looser than the per-IP
+			// gate; otherwise opening it would break NAT users on a
+			// single typo from a colleague.
+			if err == nil && int(n) >= a.rt.LoginFailMaxPerIP()*3 {
+				retry := a.rt.LoginLockoutIPMin()
+				if retry <= 0 {
+					retry = a.rt.LoginFailWindowIPMin()
+				}
+				a.recordAttempt(username, clientIP, userAgent, ReasonLockedSubnet, false)
+				a.fire(ReasonLockedSubnet, username, prefix)
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"code":             ReasonLockedSubnet,
+					"error":            "too many failed attempts from this network",
+					"retry_after_secs": retry * 60,
+				})
+				return
+			}
+		}
+	}
+
 	// --- 2. Username lockout check ------------------------------------------
-	if a.cfg.LoginFailMaxPerUser > 0 && a.cfg.LoginFailWindowUserMin > 0 {
-		since := time.Now().Add(-time.Duration(a.cfg.LoginFailWindowUserMin) * time.Minute)
+	if a.rt.LoginFailMaxPerUser() > 0 && a.rt.LoginFailWindowUserMin() > 0 {
+		since := time.Now().Add(-a.rt.LoginUserWindow())
 		n, err := a.users.CountLoginFailuresByUsername(username, since)
-		if err == nil && int(n) >= a.cfg.LoginFailMaxPerUser {
-			retry := a.cfg.LoginLockoutUserMin
+		if err == nil && int(n) >= a.rt.LoginFailMaxPerUser() {
+			retry := a.rt.LoginLockoutUserMin()
 			if retry <= 0 {
-				retry = a.cfg.LoginFailWindowUserMin
+				retry = a.rt.LoginFailWindowUserMin()
 			}
 			a.recordAttempt(username, clientIP, userAgent, ReasonLockedUser, false)
+			a.fire(ReasonLockedUser, username, clientIP)
 			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":              ReasonLockedUser,
-				"error":             "too many failed attempts for this account",
-				"retry_after_secs":  retry * 60,
+				"code":             ReasonLockedUser,
+				"error":            "too many failed attempts for this account",
+				"retry_after_secs": retry * 60,
+			})
+			return
+		}
+	}
+
+	// --- 2b. Captcha gate ---------------------------------------------------
+	// Once the user/IP has crossed the captcha threshold, the request
+	// must carry a valid (id, answer) pair. We respond 401 with a
+	// dedicated code so the frontend knows to render the math input.
+	if a.captcha != nil && a.captcha.Required(username, clientIP) {
+		if strings.TrimSpace(req.CaptchaID) == "" || strings.TrimSpace(req.CaptchaAnswer) == "" {
+			a.recordAttempt(username, clientIP, userAgent, ReasonCaptchaMissing, false)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":             ReasonCaptchaMissing,
+				"error":            "captcha required",
+				"captcha_required": true,
+			})
+			return
+		}
+		if !a.captcha.Verify(req.CaptchaID, req.CaptchaAnswer) {
+			a.recordAttempt(username, clientIP, userAgent, ReasonCaptchaWrong, false)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":             ReasonCaptchaWrong,
+				"error":            "captcha incorrect",
+				"captcha_required": true,
 			})
 			return
 		}
@@ -271,13 +363,20 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 		}
 		a.recordAttempt(username, clientIP, userAgent, reason, false)
 		// Running failure count for this username drives the delay.
-		if a.cfg.LoginFailWindowUserMin > 0 {
-			since := time.Now().Add(-time.Duration(a.cfg.LoginFailWindowUserMin) * time.Minute)
+		if a.rt.LoginFailWindowUserMin() > 0 {
+			since := time.Now().Add(-a.rt.LoginUserWindow())
 			if n, err := a.users.CountLoginFailuresByUsername(username, since); err == nil {
 				time.Sleep(penaltyDelay(int(n)))
 			}
 		}
-		c.JSON(http.StatusUnauthorized, gin.H{"code": ReasonInvalidCreds, "error": "invalid credentials"})
+		// Tell the frontend whether the next attempt will need a captcha
+		// so it can render the math input proactively.
+		needsCaptcha := a.captcha != nil && a.captcha.Required(username, clientIP)
+		resp := gin.H{"code": reason, "error": "invalid credentials"}
+		if needsCaptcha {
+			resp["captcha_required"] = true
+		}
+		c.JSON(http.StatusUnauthorized, resp)
 		return
 	}
 
@@ -307,6 +406,49 @@ func (a *Authenticator) LoginHandler(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// fire is a tiny shim around the optional Notifier so callers don't
+// need to nil-check on every event. Tag is used as ntfy's "Tags"
+// header to colour the icon in the mobile client.
+func (a *Authenticator) fire(reason, username, where string) {
+	if a.notify == nil {
+		return
+	}
+	switch reason {
+	case ReasonLockedIP:
+		a.notify.Notify("PortPass · IP 已被临时锁定",
+			fmt.Sprintf("IP %s 触发暴力登录阈值，账号目标=%s", where, username), "warning")
+	case ReasonLockedSubnet:
+		a.notify.Notify("PortPass · 网段已被临时锁定",
+			fmt.Sprintf("子网 %s 累计失败次数过多，目标=%s", where, username), "warning")
+	case ReasonLockedUser:
+		a.notify.Notify("PortPass · 账号已被临时锁定",
+			fmt.Sprintf("用户 %s 失败次数过多 (来源 %s)", username, where), "lock")
+	}
+}
+
+// subnetPrefix derives the canonical "ip/bits" prefix the store uses
+// to aggregate failures. Returns ok=false when ip is unparseable; the
+// auth handler then quietly skips the subnet check rather than block
+// a real user on a malformed forwarded header.
+func subnetPrefix(ip string, bits int) (string, bool) {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || bits <= 0 {
+		return "", false
+	}
+	if v4 := parsed.To4(); v4 != nil {
+		if bits > 32 {
+			bits = 32
+		}
+		mask := net.CIDRMask(bits, 32)
+		return (&net.IPNet{IP: v4.Mask(mask), Mask: mask}).String(), true
+	}
+	if bits > 128 {
+		bits = 128
+	}
+	mask := net.CIDRMask(bits, 128)
+	return (&net.IPNet{IP: parsed.Mask(mask), Mask: mask}).String(), true
 }
 
 // StatusHandler exposes enough metadata for the frontend router to decide

@@ -16,9 +16,12 @@ import (
 
 	"github.com/teacat99/PortPass/internal/api"
 	"github.com/teacat99/PortPass/internal/auth"
+	"github.com/teacat99/PortPass/internal/captcha"
 	"github.com/teacat99/PortPass/internal/config"
 	"github.com/teacat99/PortPass/internal/firewall"
 	"github.com/teacat99/PortPass/internal/lifecycle"
+	"github.com/teacat99/PortPass/internal/notify"
+	"github.com/teacat99/PortPass/internal/runtime"
 	"github.com/teacat99/PortPass/internal/store"
 	"github.com/teacat99/PortPass/web"
 )
@@ -66,13 +69,25 @@ func main() {
 		log.Fatalf("lifecycle start: %v", err)
 	}
 
+	// runtime.Settings holds every hot-mutable knob; load once from
+	// env defaults, then overlay the operator's persisted KV values.
+	rt := runtime.New(cfg)
+	if err := rt.LoadFromKV(s.LookupSetting); err != nil {
+		log.Printf("[runtime] load persisted settings: %v (continuing with env defaults)", err)
+	}
+
+	notifier := notify.New(rt)
+	captchaSvc := captcha.New(rt, s)
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	authn := auth.New(cfg, s)
+	authn := auth.New(cfg, rt, s)
 	authn.SetSystemAdmin(adminID, adminUsername)
-	server := api.New(cfg, s, lm, authn)
+	authn.SetCaptcha(captchaSvc)
+	authn.SetNotifier(notifier)
+	server := api.New(cfg, rt, s, lm, authn, captchaSvc, notifier)
 	server.Router(r)
 
 	mountStatic(r)

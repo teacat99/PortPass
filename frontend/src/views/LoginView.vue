@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
+import { fetchCaptcha } from '@/api/auth'
 
 const { t, locale } = useI18n()
 const auth = useAuthStore()
@@ -24,6 +25,31 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
+// Captcha state. The backend asks for a math challenge once it's seen
+// enough recent failures from this IP/user; we lazy-load on first need
+// and refresh whenever the answer is rejected.
+const captchaId = ref('')
+const captchaQuestion = ref('')
+const captchaAnswer = ref('')
+const captchaRequired = ref(false)
+const captchaLoading = ref(false)
+
+async function loadCaptcha() {
+  if (captchaLoading.value) return
+  captchaLoading.value = true
+  try {
+    const c = await fetchCaptcha()
+    captchaId.value = c.id
+    captchaQuestion.value = c.question
+    captchaAnswer.value = ''
+    captchaRequired.value = true
+  } catch {
+    captchaRequired.value = false
+  } finally {
+    captchaLoading.value = false
+  }
+}
+
 // Brute-force lockout state. When the backend returns 429 with
 // retry_after_secs we surface an in-page banner + countdown so the user
 // understands why the submit button is disabled, and we don't send any
@@ -33,7 +59,12 @@ const lockoutMessage = ref('')
 let lockoutTimer: ReturnType<typeof setInterval> | null = null
 
 const submitDisabled = computed(
-  () => loading.value || !username.value.trim() || !password.value || lockoutSecs.value > 0,
+  () =>
+    loading.value ||
+    !username.value.trim() ||
+    !password.value ||
+    lockoutSecs.value > 0 ||
+    (captchaRequired.value && !captchaAnswer.value.trim()),
 )
 
 function startLockout(secs: number, code: string) {
@@ -63,7 +94,16 @@ async function submit(e?: Event) {
   if (submitDisabled.value) return
   loading.value = true
   try {
-    await auth.login(username.value.trim(), password.value)
+    await auth.login({
+      username: username.value.trim(),
+      password: password.value,
+      captcha_id: captchaRequired.value ? captchaId.value : undefined,
+      captcha_answer: captchaRequired.value ? captchaAnswer.value.trim() : undefined,
+    })
+    captchaRequired.value = false
+    captchaAnswer.value = ''
+    captchaId.value = ''
+    captchaQuestion.value = ''
     const redirect = (route.query.redirect as string) || '/'
     router.replace(redirect)
   } catch (err: any) {
@@ -75,6 +115,34 @@ async function submit(e?: Event) {
     if (status === 429 && retryAfter && code) {
       startLockout(retryAfter, code)
       Message.error(t(`login.error.${code}`))
+      // Lockout invalidates the previous challenge.
+      captchaRequired.value = false
+      return
+    }
+
+    const captchaRequiredFlag =
+      err?.response?.data?.captcha_required === true || code === 'captcha_required'
+
+    // The backend signals "show me a captcha now" via:
+    //  - captcha_required: this attempt itself triggered the threshold
+    //    OR the gate was already on and we sent nothing.
+    //  - captcha_wrong: we sent an answer but it was wrong.
+    // In both cases fetch a fresh challenge so the user can retry
+    // without reloading the page.
+    if (captchaRequiredFlag || code === 'captcha_wrong') {
+      await loadCaptcha()
+      // For "your password was wrong AND you must now solve a captcha",
+      // surface the password message rather than the captcha one.
+      const errKey =
+        code === 'captcha_wrong'
+          ? 'login.error.captcha_wrong'
+          : code === 'captcha_required'
+            ? 'login.error.captcha_required'
+            : code
+              ? `login.error.${code}`
+              : 'login.failed'
+      const errTr = t(errKey)
+      Message.error(errTr === errKey ? english ?? t('login.failed') : errTr)
       return
     }
 
@@ -159,6 +227,32 @@ async function submit(e?: Event) {
             class="h-11 text-base"
             @keydown.enter="submit"
           />
+        </div>
+
+        <div v-if="captchaRequired" class="flex flex-col gap-1.5">
+          <Label for="login-captcha">{{ t('login.captcha') }}</Label>
+          <div class="flex items-center gap-2">
+            <span
+              class="inline-flex h-11 select-none items-center rounded-md border border-border bg-muted px-3 font-mono text-base tracking-wider text-foreground"
+              aria-label="captcha"
+            >{{ captchaQuestion }}</span>
+            <Input
+              id="login-captcha"
+              v-model="captchaAnswer"
+              :placeholder="t('login.captchaPlaceholder')"
+              inputmode="numeric"
+              autocomplete="off"
+              class="h-11 text-base flex-1"
+              @keydown.enter="submit"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              :disabled="captchaLoading"
+              @click="loadCaptcha"
+            >{{ t('login.captchaRefresh') }}</Button>
+          </div>
         </div>
 
         <Button

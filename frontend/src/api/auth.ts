@@ -24,8 +24,25 @@ export interface LoginAttempt {
   created_at: string
 }
 
-export async function login(username: string, password: string): Promise<LoginResponse> {
-  const { data } = await client.post<LoginResponse>('/auth/login', { username, password })
+export interface LoginPayload {
+  username: string
+  password: string
+  captcha_id?: string
+  captcha_answer?: string
+}
+
+export async function login(payload: LoginPayload): Promise<LoginResponse> {
+  const { data } = await client.post<LoginResponse>('/auth/login', payload)
+  return data
+}
+
+export interface CaptchaChallenge {
+  id: string
+  question: string
+}
+
+export async function fetchCaptcha(): Promise<CaptchaChallenge> {
+  const { data } = await client.get<CaptchaChallenge>('/auth/captcha')
   return data
 }
 

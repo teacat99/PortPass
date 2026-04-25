@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -33,8 +36,19 @@ type Store struct {
 
 // New opens (or creates) a SQLite database at path and runs migrations.
 func New(path string) (*Store, error) {
+	// Silence the noisy "record not found" warnings - they're expected
+	// for many code paths (e.g. lookup-or-create, optional KV reads).
+	gormLogger := logger.New(
+		log.New(os.Stderr, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger: gormLogger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -457,14 +471,33 @@ func (s *Store) CountActiveAdmins() (int64, error) {
 
 // GetSetting fetches a setting value or returns fallback when missing.
 func (s *Store) GetSetting(key, fallback string) (string, error) {
-	var row model.Setting
-	if err := s.db.First(&row, "key = ?", key).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fallback, nil
-		}
+	v, ok, err := s.LookupSetting(key)
+	if err != nil {
 		return "", err
 	}
-	return row.Value, nil
+	if !ok {
+		return fallback, nil
+	}
+	return v, nil
+}
+
+// LookupSetting reports whether a key exists in the settings KV table
+// and returns its value when so. Use this from runtime.LoadFromKV to
+// distinguish "missing" (use boot default) from "empty string"
+// (operator deliberately blanked the field, e.g. ntfy_token).
+//
+// Implementation note: we use Limit(1).Find() instead of First() so the
+// gorm logger never produces a noisy ErrRecordNotFound entry for the
+// expected miss case during boot.
+func (s *Store) LookupSetting(key string) (string, bool, error) {
+	var rows []model.Setting
+	if err := s.db.Where("key = ?", key).Limit(1).Find(&rows).Error; err != nil {
+		return "", false, err
+	}
+	if len(rows) == 0 {
+		return "", false, nil
+	}
+	return rows[0].Value, true, nil
 }
 
 // SetSetting upserts a key/value pair.
@@ -664,6 +697,80 @@ func (s *Store) CountLoginFailuresByUsername(username string, since time.Time) (
 		Where("username = ? AND success = ? AND created_at >= ?", username, false, since).
 		Count(&n).Error
 	return n, err
+}
+
+// CountLoginFailuresByIPSubnet returns the number of failed attempts whose
+// recorded ClientIP falls inside the given CIDR prefix. Implemented via a
+// SQL LIKE on the parent /N - which is cheap enough for the small per-host
+// log we keep, and avoids loading every row into memory just to apply a
+// netmask. Used only when LoginFailSubnetBits > 0.
+func (s *Store) CountLoginFailuresByIPSubnet(prefix string, since time.Time) (int64, error) {
+	parts := strings.SplitN(prefix, "/", 2)
+	if len(parts) != 2 {
+		return 0, nil
+	}
+	bits, err := strconv.Atoi(parts[1])
+	if err != nil || bits <= 0 {
+		return 0, nil
+	}
+	ip := net.ParseIP(parts[0])
+	if ip == nil {
+		return 0, nil
+	}
+	is4 := ip.To4() != nil
+	matches, scanErr := s.scanIPsInRange(since, ip, bits, is4)
+	if scanErr != nil {
+		return 0, scanErr
+	}
+	if len(matches) == 0 {
+		return 0, nil
+	}
+	var n int64
+	err = s.db.Model(&model.LoginAttempt{}).
+		Where("success = ? AND created_at >= ? AND client_ip IN ?", false, since, matches).
+		Count(&n).Error
+	return n, err
+}
+
+// scanIPsInRange returns the distinct ClientIPs already seen since
+// `since` whose addresses fall within `ip/bits`. The scan is bounded
+// by the (already-rare) login_attempts table size; this hot path runs
+// only when subnet aggregation is explicitly enabled.
+func (s *Store) scanIPsInRange(since time.Time, prefixIP net.IP, bits int, is4 bool) ([]string, error) {
+	var ips []string
+	err := s.db.Model(&model.LoginAttempt{}).
+		Where("success = ? AND created_at >= ?", false, since).
+		Distinct("client_ip").
+		Pluck("client_ip", &ips).Error
+	if err != nil {
+		return nil, err
+	}
+	mask := net.CIDRMask(bits, 32)
+	if !is4 {
+		mask = net.CIDRMask(bits, 128)
+	}
+	expected := prefixIP.Mask(mask)
+	out := make([]string, 0, len(ips))
+	for _, raw := range ips {
+		candidate := net.ParseIP(raw)
+		if candidate == nil {
+			continue
+		}
+		if is4 {
+			c4 := candidate.To4()
+			if c4 == nil {
+				continue
+			}
+			if c4.Mask(mask).Equal(expected) {
+				out = append(out, raw)
+			}
+		} else {
+			if candidate.Mask(mask).Equal(expected) {
+				out = append(out, raw)
+			}
+		}
+	}
+	return out, nil
 }
 
 // ListLoginAttempts returns recent login attempts. When username is empty

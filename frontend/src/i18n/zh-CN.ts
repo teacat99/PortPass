@@ -87,7 +87,9 @@ export default {
     reset_password: '重置密码',
     enable: '启用',
     disable: '禁用',
-    new_user: '新建用户'
+    new_user: '新建用户',
+    saving: '保存中…',
+    reset: '重置'
   },
   password: {
     old: '原密码',
@@ -221,7 +223,57 @@ export default {
     maxDurationSec: '用户最大单次时长/秒',
     maxDurationSecHelp: '0 表示不额外限制（仍受全局最大时长约束）',
     envHint: '释义',
-    envValue: '值'
+    envValue: '值',
+    runtime: {
+      intro: '以下参数支持运行时热更新，保存后立即生效；启动级参数（监听地址、防火墙驱动等）仍需重启容器。',
+      saved: '已保存运行时设置',
+      dirty: '有 {n} 处未保存的修改',
+      clean: '所有修改已保存',
+      sectionRuleLimits: '规则限制',
+      sectionLogin: '登录加固',
+      sectionDefence: '可选防护',
+      sectionNotify: '通知（ntfy 推送）',
+      sectionSystem: '只读系统信息（需重启）',
+      maxDurationHours: '单条规则最长时长',
+      maxDurationHoursHelp: '管理员/普通用户可创建的临时规则最长有效期',
+      historyRetentionDays: '历史记录保留天数',
+      historyRetentionDaysHelp: '历史记录与登录尝试自动清理周期',
+      maxRulesPerIP: '同一来源 IP 同时存活规则数',
+      maxRulesPerIPHelp: '0 表示不限',
+      rateLimit: '同 IP 接口限速',
+      rateLimitHelp: '每分钟最多请求数，0 表示不限',
+      failMaxIP: 'IP 失败次数上限',
+      failMaxIPHelp: '滚动窗口内同一 IP 触发锁定的失败次数；0 表示禁用 IP 维度限制',
+      failWindowIP: 'IP 失败统计窗口',
+      failWindowIPHelp: '窗口内累计失败才计入',
+      failMaxUser: '账号失败次数上限',
+      failMaxUserHelp: '0 表示禁用账号维度限制',
+      failWindowUser: '账号失败统计窗口',
+      failWindowUserHelp: '窗口内累计失败才计入',
+      lockoutIP: 'IP 锁定时长',
+      lockoutIPHelp: '触发后该 IP 在多久内拒绝再次登录',
+      lockoutUser: '账号锁定时长',
+      lockoutUserHelp: '触发后该账号在多久内拒绝再次登录',
+      minPwd: '密码最小长度',
+      minPwdHelp: '设置/修改密码时强制校验，至少 6',
+      subnetBits: '网段聚合位数 (CIDR)',
+      subnetBitsHelp: 'IPv4 推荐 24（=/24 子网）；0 表示禁用网段聚合',
+      captchaThreshold: '验证码触发阈值',
+      captchaThresholdHelp: '统计窗口内 IP+账号失败次数 ≥ 该值时弹出数学题；0 表示从不弹出',
+      ntfyURL: 'ntfy 服务地址',
+      ntfyURLHelp: '默认 https://ntfy.sh，自托管请填私有地址',
+      ntfyTopic: '主题 (Topic)',
+      ntfyTopicHelp: '订阅者通过该主题接收推送；为空表示禁用',
+      ntfyToken: '访问令牌',
+      ntfyTokenHelp: '需要鉴权的私有 ntfy 才填写；留空保持不变',
+      notConfigured: '未配置'
+    },
+    notify: {
+      test: '发送测试',
+      testing: '发送中…',
+      testOk: '测试推送已发送，请检查 ntfy 客户端',
+      testFail: '推送失败，请检查 URL/Topic/Token'
+    }
   },
   login: {
     title: '登录 PortPass',
@@ -232,13 +284,19 @@ export default {
     failed: '登录失败',
     retryIn: '请于 {seconds} 秒后再试',
     lockedUntil: '当前账号已被临时锁定',
+    captcha: '人机校验',
+    captchaPlaceholder: '请输入计算结果',
+    captchaRefresh: '换一题',
     error: {
       invalid_credentials: '用户名或密码错误',
       auth_disabled: '当前部署未启用密码登录',
       bad_request: '请求格式错误',
       user_disabled: '账号已被停用，请联系管理员',
       locked_ip: '当前网络登录失败次数过多，已临时锁定',
+      locked_subnet: '所在网段登录失败次数过多，已临时锁定',
       locked_user: '该账号登录失败次数过多，已临时锁定',
+      captcha_required: '请先完成人机校验',
+      captcha_wrong: '验证码错误，请重新计算',
       password_too_short: '密码至少 {min} 位',
       password_missing_letter: '密码需至少包含一个字母',
       password_missing_digit: '密码需至少包含一个数字',
@@ -299,3 +357,4 @@ export default {
     deleted: '已删除'
   }
 }
+

@@ -21,18 +21,17 @@ import type {
 import dayjs from 'dayjs'
 import { useAuthStore } from '@/stores/auth'
 import { categorize } from '@/utils/presetCategory'
-import { envHint } from '@/utils/envMeta'
 import { Message } from '@/lib/toast'
 
 import EmptyState from '@/components/EmptyState.vue'
 import PortSetInput from '@/components/PortSetInput.vue'
 import UserRangesDrawer from '@/components/UserRangesDrawer.vue'
+import RuntimeSettingsForm from '@/components/RuntimeSettingsForm.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Tabs, TabsList, TabsTrigger, TabsContent
 } from '@/components/ui/tabs'
@@ -393,27 +392,6 @@ function openRangesDrawer(u: User) {
 const createStrength = computed(() => strengthOf(userCreateForm.password))
 const resetStrength = computed(() => strengthOf(userResetForm.new_password))
 
-// ─────────── Runtime ───────────
-const runtimeKeys = [
-  'PORTPASS_LISTEN',
-  'PORTPASS_DATA_DIR',
-  'PORTPASS_FIREWALL_DRIVER',
-  'PORTPASS_MAX_DURATION_HOURS',
-  'PORTPASS_HISTORY_RETENTION_DAYS',
-  'PORTPASS_MAX_RULES_PER_IP',
-  'PORTPASS_RATE_LIMIT_PER_MINUTE_PER_IP'
-]
-
-function settingValue(key: string): string {
-  if (!settings.value) return '—'
-  if (key === 'PORTPASS_FIREWALL_DRIVER') return settings.value.firewall_driver
-  if (key === 'PORTPASS_MAX_DURATION_HOURS') return String(settings.value.max_duration_hours)
-  if (key === 'PORTPASS_HISTORY_RETENTION_DAYS') return String(settings.value.history_retention_days)
-  if (key === 'PORTPASS_AUTH_MODE') return settings.value.auth_mode
-  const kv = settings.value.kv?.find((k) => k.key === key)
-  return kv?.value || '—'
-}
-
 function protoVariant(p: string) {
   return p === 'udp' ? 'secondary' : 'default'
 }
@@ -509,7 +487,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       </TabsList>
 
       <!-- Users -->
-      <TabsContent value="users" class="flex flex-col gap-4 mt-4">
+      <TabsContent value="users" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">
             共 <strong class="text-foreground">{{ users.length }}</strong> 个账号 ·
@@ -699,7 +677,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       </TabsContent>
 
       <!-- Presets -->
-      <TabsContent value="presets" class="flex flex-col gap-4 mt-4">
+      <TabsContent value="presets" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">
             普通用户仅能在勾选了"普通用户可用"的端口上创建规则，
@@ -827,7 +805,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       </TabsContent>
 
       <!-- Protected ports -->
-      <TabsContent value="protected" class="flex flex-col gap-4 mt-4">
+      <TabsContent value="protected" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">
             用于保护本机已被业务占用的端口；任何账户（含管理员）都不能临时开放。
@@ -928,7 +906,7 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       </TabsContent>
 
       <!-- Security / Login history -->
-      <TabsContent value="security" class="flex flex-col gap-4 mt-4">
+      <TabsContent value="security" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <p class="text-sm text-muted-foreground m-0">{{ t('security.subtitle') }}</p>
           <div class="flex items-center gap-2">
@@ -1016,97 +994,8 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
       </TabsContent>
 
       <!-- Runtime -->
-      <TabsContent value="runtime" class="flex flex-col gap-4 mt-4">
-        <Alert variant="info">
-          <AlertDescription>
-            这些参数由启动时的环境变量决定（PORTPASS_* 系列）。如需修改请编辑容器配置后重启。
-          </AlertDescription>
-        </Alert>
-
-        <div class="flex flex-col gap-5">
-          <section class="flex flex-col gap-2">
-            <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              {{ t('settings.sectionBasics') }}
-            </h4>
-            <div v-if="settings" class="flex flex-col gap-1.5">
-              <div
-                v-for="k in runtimeKeys"
-                :key="k"
-                class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
-              >
-                <code class="font-mono text-xs text-foreground/90">{{ k }}</code>
-                <span class="text-xs text-muted-foreground">
-                  {{ envHint(k, locale as 'zh-CN' | 'en-US') }}
-                </span>
-                <code class="font-mono text-sm font-semibold text-primary md:text-right break-all">
-                  {{ settingValue(k) }}
-                </code>
-              </div>
-            </div>
-          </section>
-
-          <section class="flex flex-col gap-2">
-            <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              {{ t('settings.sectionProxies') }}
-            </h4>
-            <div
-              class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
-            >
-              <code class="font-mono text-xs text-foreground/90">PORTPASS_TRUSTED_PROXIES</code>
-              <span class="text-xs text-muted-foreground">
-                {{ envHint('PORTPASS_TRUSTED_PROXIES', locale as 'zh-CN' | 'en-US') }}
-              </span>
-              <div class="md:text-right flex flex-wrap gap-1 md:justify-end">
-                <Badge
-                  v-for="p in settings?.trusted_proxies || []"
-                  :key="p"
-                  variant="default"
-                  class="text-[10px] font-mono"
-                >{{ p }}</Badge>
-                <span v-if="!settings?.trusted_proxies?.length" class="text-muted-foreground text-xs">未配置</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="flex flex-col gap-2">
-            <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              {{ t('settings.sectionAuth') }}
-            </h4>
-            <div v-if="settings" class="flex flex-col gap-1.5">
-              <div
-                class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
-              >
-                <code class="font-mono text-xs text-foreground/90">PORTPASS_AUTH_MODE</code>
-                <span class="text-xs text-muted-foreground">
-                  {{ envHint('PORTPASS_AUTH_MODE', locale as 'zh-CN' | 'en-US') }}
-                </span>
-                <code class="font-mono text-sm font-semibold text-primary md:text-right">{{ settings.auth_mode }}</code>
-              </div>
-              <div
-                class="grid grid-cols-1 md:grid-cols-[minmax(220px,260px)_1fr_minmax(140px,auto)] gap-2 md:gap-4 items-center px-4 py-2.5 bg-muted/40 rounded-md"
-              >
-                <code class="font-mono text-xs text-foreground/90">PORTPASS_ADMIN_USERNAME</code>
-                <span class="text-xs text-muted-foreground">
-                  {{ envHint('PORTPASS_ADMIN_USERNAME', locale as 'zh-CN' | 'en-US') }}
-                </span>
-                <code class="font-mono text-sm font-semibold text-primary md:text-right">
-                  {{ settingValue('PORTPASS_ADMIN_USERNAME') }}
-                </code>
-              </div>
-            </div>
-            <div v-if="settings" class="text-sm text-muted-foreground leading-relaxed px-1">
-              <p v-if="settings.auth_mode === 'password'" class="m-0">
-                用户名 + 密码登录，签发 JWT。所有账号信息持久化在 SQLite。
-              </p>
-              <p v-else-if="settings.auth_mode === 'ipwhitelist'" class="m-0">
-                仅根据来源 IP 是否在白名单内放行，UI 跳过登录步骤。
-              </p>
-              <p v-else class="m-0">
-                关闭鉴权，任何人都可以访问。<strong class="text-foreground">仅适合内网或开发环境。</strong>
-              </p>
-            </div>
-          </section>
-        </div>
+      <TabsContent value="runtime" class="mt-4 rounded-lg border border-border bg-card p-4 md:p-6 flex flex-col gap-4">
+        <RuntimeSettingsForm @saved="reload" />
       </TabsContent>
     </Tabs>
 

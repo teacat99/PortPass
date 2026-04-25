@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { authStatus, getMe, login as apiLogin, type LastLoginInfo } from '@/api/auth'
+import { authStatus, getMe, login as apiLogin, type LastLoginInfo, type LoginPayload } from '@/api/auth'
 import type { Me, Role } from '@/api/types'
 
 // useAuthStore centralises everything the UI needs about the current
@@ -38,8 +38,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(username: string, password: string) {
-    const resp = await apiLogin(username, password)
+  async function login(payload: LoginPayload) {
+    const resp = await apiLogin(payload)
     token.value = resp.token
     localStorage.setItem('portpass.token', resp.token)
     lastLogin.value = resp.last_login ?? null
