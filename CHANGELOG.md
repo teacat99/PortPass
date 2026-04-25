@@ -4,6 +4,38 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-04-25
+
+### 新增
+
+- **主题三态切换**：从亮/暗二态改为「跟随系统 → 浅色 → 深色」三态循环，图标分别用 SunMoon / Sun / Moon
+- **密码显隐切换**：登录页与修改密码弹窗的密码输入框增加 Eye / EyeOff 显隐按钮
+- **theme-color 暗色适配**：`<meta name="theme-color">` 改为双标签（light/dark media query），JS 切换时同步更新
+- **i18n 补齐**：新增 `theme.light` / `theme.dark` / `theme.auto` / `theme.switchTo.*` 中英文案
+
+### 优化
+
+- PWA manifest `theme_color` / `background_color` 统一为浅色底色 `#f6f8fb`
+- Toast 位置从 `top-right` 改为 `top-left`，减少与顶栏操作按钮的冲突
+
+### 修复
+
+- 移动端「立即开放」按钮与底部导航栏之间有空隙（`padding-bottom` / `bottom` 从 `4.5rem` 调整为 `3.5rem`）
+
+### 基础设施
+
+- CI 修复：合并前端与后端为单 job，解决 `//go:embed all:dist` 在 CI 中找不到文件的问题
+- Dependabot 安全升级：`actions/setup-go` v6、`actions/setup-node` v6、`docker/metadata-action` v6、`golang` 1.26-alpine、`alpine` 3.23
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.1.0
+docker pull ghcr.io/teacat99/portpass:1.1.0
+```
+
+数据库无变更，自动迁移无需手动操作。
+
 ## [1.0.0] - 2026-04-25
 
 首个公开发布版本。
@@ -37,4 +69,5 @@ docker pull ghcr.io/teacat99/portpass:1.0.0
 
 数据库由 GORM 自动迁移，无需手动操作。
 
+[1.1.0]: https://github.com/teacat99/PortPass/releases/tag/v1.1.0
 [1.0.0]: https://github.com/teacat99/PortPass/releases/tag/v1.0.0
