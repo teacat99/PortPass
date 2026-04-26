@@ -4,6 +4,28 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.1.2] - 2026-04-26
+
+### 新增
+
+- **预设端口分类与图标管理**：预设端口编辑弹窗新增「分类」下拉，支持选择内置分类（远程登录 / Web 服务 / 数据库 / 消息队列 / 游戏服务 / 其他端口）、自定义新增分类、改名 / 改图标、删除自定义分类（二次确认；删除后引用该分类的预设回退为自动识别）
+- **图标选择器**：双 Tab 设计，常用 emoji 网格（30+ 精选）+ 图片 URL（`favicon.im` / `t1.gstatic.com/faviconV2` 等返回站点图标的链接，自动圆角渲染）
+- **PWA 移动端返回手势 = 关闭弹窗**：在弹窗打开时按系统返回手势 / 浏览器返回按钮优先关闭最顶层弹窗而非退出页面，符合主流 App 心理预期；支持多层嵌套弹窗按 LIFO 顺序逐层关闭
+
+### 优化
+
+- 预设保留按名称 / 端口的自动识别启发式作为 fallback：未手动选择分类时仍按现有规则归类
+- 首页与设置页图标渲染统一支持 emoji 与图片 URL 混排
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.1.2
+docker pull ghcr.io/teacat99/portpass:1.1.2
+```
+
+数据库会自动迁移：新增 `preset_categories` 表，`preset_ports` 增加可空字段 `category_id`。无需手动干预。
+
 ## [1.1.1] - 2026-04-26
 
 ### 优化
@@ -87,6 +109,7 @@ docker pull ghcr.io/teacat99/portpass:1.0.0
 
 数据库由 GORM 自动迁移，无需手动操作。
 
+[1.1.2]: https://github.com/teacat99/PortPass/releases/tag/v1.1.2
 [1.1.1]: https://github.com/teacat99/PortPass/releases/tag/v1.1.1
 [1.1.0]: https://github.com/teacat99/PortPass/releases/tag/v1.1.0
 [1.0.0]: https://github.com/teacat99/PortPass/releases/tag/v1.0.0
