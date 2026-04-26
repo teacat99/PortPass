@@ -7,7 +7,9 @@ import {
   Lock, Users as UsersIcon, Settings as SettingsIcon,
   AlertTriangle, Package, History, Check, X as XIcon
 } from 'lucide-vue-next'
-import { deletePreset, getSettings, listPresets, upsertPreset } from '@/api/rules'
+import {
+  deletePreset, getSettings, listPresetCategories, listPresets, upsertPreset
+} from '@/api/rules'
 import {
   listProtectedPorts, upsertProtectedPort, deleteProtectedPort, listUserRanges
 } from '@/api/policy'
@@ -16,17 +18,19 @@ import {
 } from '@/api/users'
 import { fetchLoginHistory, type LoginAttempt } from '@/api/auth'
 import type {
-  PresetPort, ProtectedPort, SettingsBundle, User, Role
+  PresetCategory, PresetPort, ProtectedPort, SettingsBundle, User, Role
 } from '@/api/types'
 import dayjs from 'dayjs'
 import { useAuthStore } from '@/stores/auth'
-import { categorize } from '@/utils/presetCategory'
+import { resolveCategory } from '@/utils/presetCategory'
+import { isImageIcon } from '@/utils/presetIcon'
 import { Message } from '@/lib/toast'
 
 import EmptyState from '@/components/EmptyState.vue'
 import PortSetInput from '@/components/PortSetInput.vue'
 import UserRangesDrawer from '@/components/UserRangesDrawer.vue'
 import RuntimeSettingsForm from '@/components/RuntimeSettingsForm.vue'
+import PresetCategorySelect from '@/components/PresetCategorySelect.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -75,6 +79,7 @@ async function loadLoginHistory() {
 
 const settings = ref<SettingsBundle | null>(null)
 const presets = ref<PresetPort[]>([])
+const presetCategories = ref<PresetCategory[]>([])
 const protectedPorts = ref<ProtectedPort[]>([])
 const users = ref<User[]>([])
 const userRangeCounts = ref<Record<number, number>>({})
@@ -83,20 +88,30 @@ const loading = ref(false)
 async function reload() {
   loading.value = true
   try {
-    const [s, p, pp, us] = await Promise.all([
+    const [s, p, cats, pp, us] = await Promise.all([
       getSettings(),
       listPresets(),
+      listPresetCategories().catch(() => [] as PresetCategory[]),
       listProtectedPorts().catch(() => []),
       listUsers().catch(() => [])
     ])
     settings.value = s
     presets.value = p
+    presetCategories.value = cats
     protectedPorts.value = pp
     users.value = us
     await refreshRangeCounts()
   } finally {
     loading.value = false
   }
+}
+
+// Resolve a preset's category icon for table/card rendering. When
+// categories haven't loaded yet (or the heuristic returns nothing) we
+// fall back to a neutral plug emoji so the row never renders empty.
+function presetIcon(p: PresetPort): string {
+  const cat = resolveCategory(p, presetCategories.value)
+  return cat?.icon || '🔌'
 }
 
 async function refreshRangeCounts() {
@@ -128,14 +143,19 @@ function openPresetCreate() {
     protocol: 'tcp',
     sort: 99,
     user_allowed: false,
-    max_duration_sec: 0
+    max_duration_sec: 0,
+    category_id: null
   }
   presetPortsValid.value = { ok: false, error: null }
   presetEditVisible.value = true
 }
 
 function openPresetEdit(p: PresetPort) {
-  presetEditing.value = { ...p, ports: p.ports || String(p.port || '') }
+  presetEditing.value = {
+    ...p,
+    ports: p.ports || String(p.port || ''),
+    category_id: p.category_id ?? null
+  }
   presetPortsValid.value = { ok: true, error: null }
   presetEditVisible.value = true
 }
@@ -722,7 +742,15 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
               <TableRow v-for="p in presets" :key="p.id">
                 <TableCell>
                   <span class="inline-flex items-center gap-2">
-                    <span class="text-base">{{ categorize(p).icon }}</span>
+                    <span class="inline-flex items-center justify-center size-5 shrink-0">
+                      <img
+                        v-if="isImageIcon(presetIcon(p))"
+                        :src="presetIcon(p)"
+                        class="size-5 rounded-md object-cover"
+                        referrerpolicy="no-referrer"
+                      />
+                      <span v-else class="text-base">{{ presetIcon(p) }}</span>
+                    </span>
                     <span class="font-medium">{{ p.name }}</span>
                   </span>
                 </TableCell>
@@ -776,7 +804,15 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
           >
             <div class="flex items-center justify-between gap-2">
               <span class="inline-flex items-center gap-2 min-w-0">
-                <span class="text-base">{{ categorize(p).icon }}</span>
+                <span class="inline-flex items-center justify-center size-5 shrink-0">
+                  <img
+                    v-if="isImageIcon(presetIcon(p))"
+                    :src="presetIcon(p)"
+                    class="size-5 rounded-md object-cover"
+                    referrerpolicy="no-referrer"
+                  />
+                  <span v-else class="text-base">{{ presetIcon(p) }}</span>
+                </span>
                 <strong class="truncate">{{ p.name }}</strong>
               </span>
               <code class="font-mono text-xs text-foreground">{{ p.ports || p.port }}/{{ p.protocol }}</code>
@@ -1056,6 +1092,15 @@ const protocolOptions = ['tcp', 'udp', 'both'] as const
                 {{ p === 'both' ? 'TCP+UDP' : p.toUpperCase() }}
               </button>
             </div>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>{{ t('settings.presetCategory') }}</Label>
+            <PresetCategorySelect
+              :model-value="presetEditing.category_id ?? null"
+              :categories="presetCategories"
+              @update:model-value="(v: number | null) => (presetEditing.category_id = v)"
+              @update:categories="(v: PresetCategory[]) => (presetCategories = v)"
+            />
           </div>
           <div class="flex items-center justify-between rounded-md bg-muted/40 p-3">
             <div class="flex flex-col gap-0.5">

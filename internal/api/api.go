@@ -183,6 +183,12 @@ func (s *Server) Router(engine *gin.Engine) {
 	g.POST("/preset-ports", s.handleUpsertPreset)
 	g.DELETE("/preset-ports/:id", s.handleDeletePreset)
 
+	// Preset categories — list is open to every authenticated user so
+	// the home page can render group icons; mutations are admin-only.
+	g.GET("/preset-categories", s.handleListPresetCategories)
+	g.POST("/preset-categories", s.handleUpsertPresetCategory)
+	g.DELETE("/preset-categories/:id", s.handleDeletePresetCategory)
+
 	// Protected ports — admin-only list + CRUD; used by the policy
 	// chain to block anyone (admin included) from opening sensitive
 	// business ports by accident.
@@ -637,6 +643,19 @@ func (s *Server) handleUpsertPreset(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "max_duration_sec must be >= 0"})
 		return
 	}
+	// Verify the referenced category exists. nil category_id means
+	// "auto-detect", which is valid; a non-nil reference must resolve.
+	if p.CategoryID != nil {
+		cat, err := s.store.GetPresetCategory(*p.CategoryID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if cat == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category_id does not exist"})
+			return
+		}
+	}
 	// Reverse-intersection check: a preset cannot cover any port that
 	// is registered as protected. Surfaces the conflict early so the
 	// admin edits one list at a time.
@@ -666,6 +685,100 @@ func (s *Server) handleDeletePreset(c *gin.Context) {
 		return
 	}
 	if err := s.store.DeletePresetPort(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// handleListPresetCategories returns every category in render order.
+// Read access is open to every authenticated user so the home page
+// (used by both admin and user roles) can render group icons without
+// requiring elevated privileges.
+func (s *Server) handleListPresetCategories(c *gin.Context) {
+	cats, err := s.store.ListPresetCategories()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cats)
+}
+
+// handleUpsertPresetCategory creates or updates a category. The Builtin
+// flag is server-controlled: a fresh insert always lands as Builtin=false,
+// and an update preserves whatever the existing row had so a rename or
+// icon swap on a built-in row keeps its protected status.
+func (s *Server) handleUpsertPresetCategory(c *gin.Context) {
+	if !s.ensureAdmin(c) {
+		return
+	}
+	var p model.PresetCategory
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(p.Label) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "label too long (max 64)"})
+		return
+	}
+	if len(p.Icon) > 255 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "icon too long (max 255)"})
+		return
+	}
+	// Edits look up the current row to preserve Builtin / Key. New rows
+	// get Builtin=false unconditionally and a blank Key (built-ins are
+	// only ever created by the seeder).
+	if p.ID != 0 {
+		existing, err := s.store.GetPresetCategory(p.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if existing == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
+			return
+		}
+		p.Builtin = existing.Builtin
+		p.Key = existing.Key
+		p.CreatedAt = existing.CreatedAt
+	} else {
+		p.Builtin = false
+		p.Key = ""
+	}
+	if err := s.store.UpsertPresetCategory(&p); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, p)
+}
+
+// handleDeletePresetCategory removes a non-builtin category. Built-in
+// categories are protected (Builtin=true returns 409) so the seven-row
+// baseline can never be wiped out by accident; presets pointing at the
+// deleted row are detached inside the store transaction.
+func (s *Server) handleDeletePresetCategory(c *gin.Context) {
+	if !s.ensureAdmin(c) {
+		return
+	}
+	id, err := parseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cat, err := s.store.GetPresetCategory(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if cat == nil {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	if cat.Builtin {
+		c.JSON(http.StatusConflict, gin.H{"error": "builtin category cannot be deleted"})
+		return
+	}
+	if err := s.store.DeletePresetCategory(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

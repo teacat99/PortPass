@@ -1,5 +1,11 @@
 import client from './client'
-import type { CreateRulePayload, PresetPort, Rule, SettingsBundle } from './types'
+import type {
+  CreateRulePayload,
+  PresetCategory,
+  PresetPort,
+  Rule,
+  SettingsBundle
+} from './types'
 
 export async function fetchClientIP() {
   const { data } = await client.get<{ ip: string }>('/client-ip')
@@ -58,6 +64,20 @@ export async function upsertPreset(p: Partial<PresetPort>) {
 
 export async function deletePreset(id: number) {
   await client.delete(`/preset-ports/${id}`)
+}
+
+export async function listPresetCategories() {
+  const { data } = await client.get<PresetCategory[]>('/preset-categories')
+  return data
+}
+
+export async function upsertPresetCategory(c: Partial<PresetCategory>) {
+  const { data } = await client.post<PresetCategory>('/preset-categories', c)
+  return data
+}
+
+export async function deletePresetCategory(id: number) {
+  await client.delete(`/preset-categories/${id}`)
 }
 
 export async function getSettings() {

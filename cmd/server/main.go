@@ -41,6 +41,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
+	if err := s.SeedPresetCategories(); err != nil {
+		log.Fatalf("seed preset categories: %v", err)
+	}
 	if err := s.SeedPresetPorts(); err != nil {
 		log.Fatalf("seed presets: %v", err)
 	}

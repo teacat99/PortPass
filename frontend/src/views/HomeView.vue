@@ -4,11 +4,12 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import { CheckCircle2, Lock, ArrowRight, RotateCcw, Clock } from 'lucide-vue-next'
-import { createRule, fetchClientIP, listPresets } from '@/api/rules'
-import type { CreateRulePayload, PresetPort, Rule } from '@/api/types'
+import { createRule, fetchClientIP, listPresetCategories, listPresets } from '@/api/rules'
+import type { CreateRulePayload, PresetCategory, PresetPort, Rule } from '@/api/types'
 import { useRulesStore } from '@/stores/rules'
 import { useAuthStore } from '@/stores/auth'
-import { groupPresets } from '@/utils/presetCategory'
+import { groupPresetsBy } from '@/utils/presetCategory'
+import { isImageIcon } from '@/utils/presetIcon'
 import { parsePortSet } from '@/utils/portset'
 import { toast } from 'vue-sonner'
 import { Message } from '@/lib/toast'
@@ -29,6 +30,7 @@ const auth = useAuthStore()
 const clientIP = ref<string>('')
 const ipLoading = ref(true)
 const presets = ref<PresetPort[]>([])
+const presetCategories = ref<PresetCategory[]>([])
 const presetsLoading = ref(true)
 const submitting = ref(false)
 const lastResult = ref<Rule | null>(null)
@@ -61,7 +63,19 @@ const greeting = computed(() => {
   return t('home.helloEvening')
 })
 
-const groupedPresets = computed(() => groupPresets(presets.value))
+const groupedPresets = computed(() => groupPresetsBy(presets.value, presetCategories.value))
+
+// Display label for a category, falling back to the i18n key
+// (home.cat<Pascal>) when the row's label is blank — built-in
+// categories ship with empty labels so they translate by locale.
+function categoryDisplayLabel(c: PresetCategory): string {
+  if (c.label) return c.label
+  if (c.builtin && c.key) {
+    const k = 'home.cat' + c.key.charAt(0).toUpperCase() + c.key.slice(1)
+    return t(k)
+  }
+  return c.key || ''
+}
 
 // activePreset locates the preset matching the current port set + protocol
 // so we can surface per-preset constraints (e.g. max duration cap).
@@ -124,8 +138,14 @@ onMounted(async () => {
   finally { ipLoading.value = false }
 
   presetsLoading.value = true
-  try { presets.value = await listPresets() }
-  catch { /* ditto */ }
+  try {
+    const [list, cats] = await Promise.all([
+      listPresets(),
+      listPresetCategories().catch(() => [] as PresetCategory[])
+    ])
+    presets.value = list
+    presetCategories.value = cats
+  } catch { /* ditto */ }
   finally { presetsLoading.value = false }
 })
 
@@ -298,10 +318,18 @@ const sourceOptions = computed<SourceOpt[]>(() => [
         </div>
 
         <div v-else class="flex flex-col gap-3">
-          <div v-for="g in groupedPresets" :key="g.key" class="flex flex-col gap-1.5">
+          <div v-for="g in groupedPresets" :key="g.category.id" class="flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <span class="text-sm">{{ g.icon }}</span>
-              {{ t('home.cat' + g.key.charAt(0).toUpperCase() + g.key.slice(1)) }}
+              <span class="inline-flex items-center justify-center size-4 shrink-0">
+                <img
+                  v-if="isImageIcon(g.category.icon)"
+                  :src="g.category.icon"
+                  class="size-4 rounded-sm object-cover"
+                  referrerpolicy="no-referrer"
+                />
+                <span v-else class="text-sm">{{ g.category.icon || '🔌' }}</span>
+              </span>
+              {{ categoryDisplayLabel(g.category) }}
             </div>
             <div class="flex flex-wrap gap-1.5">
               <button

@@ -65,6 +65,37 @@ type PresetPort struct {
 	Sort           int    `gorm:"column:sort_order" json:"sort"`
 	UserAllowed    bool   `gorm:"default:false" json:"user_allowed"`
 	MaxDurationSec int    `gorm:"default:0" json:"max_duration_sec"`
+	// CategoryID points to a PresetCategory row. nil means "auto-detect"
+	// using the frontend heuristic (categorize by name/port). Manual
+	// selection persists here so the UI can group presets without
+	// re-running heuristics on every load.
+	CategoryID *uint `gorm:"index" json:"category_id,omitempty"`
+}
+
+// PresetCategory groups preset ports for display purposes. Six built-in
+// rows (remote/web/db/mq/game/misc) are seeded on first boot with
+// Builtin=true; the UI prevents deletion of those rows but allows
+// re-labelling and icon overrides. Operators may add their own custom
+// categories beyond the built-in set, identified by Builtin=false and a
+// blank Key.
+type PresetCategory struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// Key matches the heuristic slug used by the frontend categorize()
+	// function: remote/web/db/mq/game/misc for built-ins; empty string
+	// for user-defined entries.
+	Key string `gorm:"size:32;index" json:"key"`
+	// Label is the user-visible name. Empty for built-ins (the frontend
+	// then falls back to its i18n string keyed by Key); a non-empty
+	// value overrides the i18n string.
+	Label string `gorm:"size:64" json:"label"`
+	// Icon holds either an emoji glyph or an http(s):// image URL. The
+	// frontend detects the kind by URL prefix and renders rounded
+	// images for the URL case.
+	Icon      string    `gorm:"size:255" json:"icon"`
+	Sort      int       `gorm:"column:sort_order" json:"sort"`
+	Builtin   bool      `gorm:"default:false" json:"builtin"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ProtectedPort declares a port group the operator has marked as in-use

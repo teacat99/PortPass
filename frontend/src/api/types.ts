@@ -26,6 +26,26 @@ export interface PresetPort {
   sort: number
   user_allowed: boolean
   max_duration_sec: number
+  category_id?: number | null
+}
+
+// PresetCategory groups preset ports for display purposes. The backend
+// seeds six built-in rows (remote/web/db/mq/game/misc) marked
+// builtin=true; the UI prevents deletion of those rows but allows
+// re-labelling and icon overrides. User-added rows have an empty key
+// and builtin=false.
+export interface PresetCategory {
+  id: number
+  // Built-in slug (remote/web/db/mq/game/misc) or empty for user-added.
+  key: string
+  // User-visible label. Empty on built-ins means "use i18n by key".
+  label: string
+  // Either an emoji glyph or an http(s):// image URL.
+  icon: string
+  sort: number
+  builtin: boolean
+  created_at?: string
+  updated_at?: string
 }
 
 export interface ProtectedPort {

@@ -61,6 +61,7 @@ func New(path string) (*Store, error) {
 
 	if err := db.AutoMigrate(
 		&model.Rule{},
+		&model.PresetCategory{},
 		&model.PresetPort{},
 		&model.ProtectedPort{},
 		&model.UserAllowedRange{},
@@ -186,6 +187,30 @@ func (s *Store) firstAdminID() (uint, error) {
 // DB returns the underlying *gorm.DB for callers that need advanced queries
 // (pagination, joins, etc.) without re-implementing them on the Store.
 func (s *Store) DB() *gorm.DB { return s.db }
+
+// SeedPresetCategories inserts the six built-in categories the first time
+// the table is empty. The keys/icons mirror the legacy frontend
+// categorize() heuristic so existing presets keep their auto-detected
+// grouping after the migration. Subsequent boots are no-ops; admins are
+// free to rename, re-icon, or hide categories without being overwritten.
+func (s *Store) SeedPresetCategories() error {
+	var count int64
+	if err := s.db.Model(&model.PresetCategory{}).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	defaults := []model.PresetCategory{
+		{Key: "remote", Icon: "🔐", Sort: 1, Builtin: true},
+		{Key: "web", Icon: "🌐", Sort: 2, Builtin: true},
+		{Key: "db", Icon: "🗄️", Sort: 3, Builtin: true},
+		{Key: "mq", Icon: "📬", Sort: 4, Builtin: true},
+		{Key: "game", Icon: "🎮", Sort: 5, Builtin: true},
+		{Key: "misc", Icon: "🔌", Sort: 6, Builtin: true},
+	}
+	return s.db.Create(&defaults).Error
+}
 
 // SeedPresetPorts inserts the default preset list when the table is empty. It
 // is idempotent across restarts so operators can freely tweak the table
@@ -391,6 +416,49 @@ func (s *Store) UpsertPresetPort(p *model.PresetPort) error {
 // DeletePresetPort removes a preset by ID.
 func (s *Store) DeletePresetPort(id uint) error {
 	return s.db.Delete(&model.PresetPort{}, id).Error
+}
+
+// ListPresetCategories returns all categories ordered by Sort then ID so
+// the UI can render a stable list.
+func (s *Store) ListPresetCategories() ([]model.PresetCategory, error) {
+	var out []model.PresetCategory
+	err := s.db.Order("sort_order ASC, id ASC").Find(&out).Error
+	return out, err
+}
+
+// GetPresetCategory loads one category by ID; returns (nil, nil) when
+// absent so callers can distinguish from a real error.
+func (s *Store) GetPresetCategory(id uint) (*model.PresetCategory, error) {
+	var c model.PresetCategory
+	if err := s.db.First(&c, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+// UpsertPresetCategory creates or updates a category. Builtin protection
+// (no creating new builtins, no flipping existing builtins to false) is
+// enforced by the API layer before this call.
+func (s *Store) UpsertPresetCategory(c *model.PresetCategory) error {
+	return s.db.Save(c).Error
+}
+
+// DeletePresetCategory removes a category and detaches every preset
+// pointing at it (CategoryID becomes NULL, so the preset falls back to
+// the heuristic auto-detection on next render). Wrapped in a single
+// transaction so a partial failure leaves no orphaned references.
+func (s *Store) DeletePresetCategory(id uint) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.PresetPort{}).
+			Where("category_id = ?", id).
+			Update("category_id", nil).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.PresetCategory{}, id).Error
+	})
 }
 
 // ------------------------- users -------------------------
