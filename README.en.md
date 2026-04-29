@@ -68,6 +68,7 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 | `PORTPASS_ADMIN_IP_WHITELIST` | — | Comma-separated CIDRs; required for `ipwhitelist` |
 | `PORTPASS_TRUSTED_PROXIES` | — | Reverse-proxy CIDRs; enables `X-Forwarded-For` parsing |
 | `PORTPASS_FIREWALL_DRIVER` | `iptables` | `iptables` / `nftables` / `ufw` / `firewalld` / `mock` |
+| `PORTPASS_IPTABLES_BACKEND` | auto-detect | Only honoured by the `iptables` driver. `legacy` / `nft`; leave empty to follow the host's active backend |
 | `PORTPASS_DATA_DIR` | `/data` | SQLite + audit log directory |
 | `PORTPASS_JWT_SECRET` | random | Empty rotates on each restart |
 | `PORTPASS_MAX_DURATION_HOURS` | `24` | Per-rule max lifetime |
@@ -104,11 +105,48 @@ All accounts live in SQLite (bcrypt hashed). The auth mode only decides which id
 
 | Driver | When to use | Notes |
 | --- | --- | --- |
-| `iptables` | Default — any Linux | Needs `iptables` + `NET_ADMIN`; IPv6 via `ip6tables` |
-| `nftables` | Modern distros | Owns a dedicated `inet portpass` table |
+| `iptables` | Default — any Linux | Needs `iptables` + `NET_ADMIN`; IPv6 via `ip6tables`; entrypoint auto-selects the host's legacy / nft backend on container start |
+| `nftables` | Modern distros (Debian 11+, RHEL 9+, Ubuntu 22+) | Owns a dedicated `inet portpass` table |
 | `ufw` | Ubuntu with ufw enabled | Rules appear with `# portpass:<id>` comment |
 | `firewalld` | RHEL/CentOS/Fedora | Uses runtime rich-rules only (not permanent) |
 | `mock` | Development | In-memory only; does not touch real firewall |
+
+### Automatic iptables backend selection
+
+The runtime image ships **both** `iptables-legacy` and `iptables-nft` binaries. On every container start, `docker-entrypoint.sh` probes which backend the host is actively using by looking for tell-tale chains created by firewalld / ufw / docker (e.g. `INPUT_ZONES`, `ufw-input`, `DOCKER-USER`) and re-symlinks `iptables` / `iptables-save` / `iptables-restore` / `ip6tables*` to the matching implementation. You will see one log line:
+
+```
+[portpass-entrypoint] iptables backend = legacy (auto-detected)
+```
+
+This makes a single image work transparently on CentOS 7 (legacy) and Debian 12 (nft) alike. To override (typically for debugging) set:
+
+```bash
+docker run ... -e PORTPASS_IPTABLES_BACKEND=legacy ghcr.io/teacat99/portpass:latest
+# Allowed values: legacy / nft; anything else falls back to nft.
+```
+
+> **Why this matters**: On CentOS 7 + firewalld, *every* host rule (including the trailing `REJECT` in `INPUT`) lives in iptables-legacy / xtables. Alpine 3.18+ ships `iptables` as `iptables-nft`, which writes to a separate nft table — the rule applies and self-verifies, but packets never traverse it. The visible symptom is "UI says rule is active, but the port is still unreachable from the outside".
+
+## Host OS Compatibility
+
+PortPass is **Linux-only** (Windows / macOS / *BSD are not supported because the firewall drivers rely on Linux netfilter). With the `iptables` driver and the auto-backend entrypoint, the following common distributions work out of the box without any extra configuration:
+
+| Distribution | Kernel | Default firewall | iptables backend | Recommended driver |
+| --- | --- | --- | --- | --- |
+| CentOS 7 / RHEL 7 | 3.10 | firewalld | **legacy** | `iptables` |
+| CentOS 8 / RHEL 8 / Rocky 8 / AlmaLinux 8 | 4.18 | firewalld (nft) | nft | `iptables` or `nftables` |
+| RHEL 9 / Rocky 9 / AlmaLinux 9 / Stream 9 | 5.14 | firewalld (nft) | nft | `iptables` or `nftables` |
+| Fedora 36+ | 5.17+ | firewalld (nft) | nft | `iptables` or `nftables` |
+| Debian 10 (Buster) | 4.19 | nftables (first nft-default Debian) | nft | `iptables` or `nftables` |
+| Debian 11 / 12 | 5.10 / 6.1 | nftables | nft | `iptables` or `nftables` |
+| Ubuntu 18.04 LTS | 4.15 | ufw (legacy) | **legacy** | `iptables` or `ufw` |
+| Ubuntu 20.04 LTS | 5.4 | ufw (legacy default, may switch to nft) | depends on `update-alternatives` | `iptables` or `ufw` |
+| Ubuntu 22.04 / 24.04 LTS | 5.15 / 6.8 | ufw (nft) | nft | `iptables` / `ufw` / `nftables` |
+| OpenWrt ≤ 21.02 | ≤ 5.4 | iptables (fw3) | **legacy** | `iptables` |
+| OpenWrt 22.03+ | 5.10+ | nftables (fw4) | nft | `nftables` |
+
+> Entries marked **legacy** rely on the entrypoint's auto-detection. Keep your image at `v1.1.3` or newer.
 
 ## Reliability
 

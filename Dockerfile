@@ -30,10 +30,15 @@ RUN CGO_ENABLED=0 go build \
 
 # ---- Stage 3: runtime ----
 FROM alpine:3.23
+# iptables-legacy is shipped alongside iptables (nft backend) so the
+# entrypoint can pick whichever matches the host. CentOS 7/RHEL 7 / Ubuntu
+# 18.04 / OpenWrt etc. still rely on legacy xtables, while Debian 11+ /
+# RHEL 9+ / Ubuntu 22+ default to nft. See docker-entrypoint.sh.
 RUN apk add --no-cache \
       ca-certificates \
       tzdata \
       iptables \
+      iptables-legacy \
       ip6tables \
       nftables \
  && adduser -D -u 10001 portpass \
@@ -41,6 +46,8 @@ RUN apk add --no-cache \
  && chown portpass:portpass /data
 
 COPY --from=backend /out/portpass /usr/local/bin/portpass
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV PORTPASS_LISTEN=":8080" \
     PORTPASS_DATA_DIR="/data" \
@@ -54,4 +61,4 @@ EXPOSE 8080
 # NET_ADMIN is required for every supported firewall driver. Run the
 # container with `--cap-add=NET_ADMIN --network=host` in production.
 USER root
-ENTRYPOINT ["/usr/local/bin/portpass"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

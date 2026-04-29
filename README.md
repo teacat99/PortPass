@@ -78,6 +78,7 @@ PORTPASS_ADMIN_PASSWORD=dev ./portpass
 | `PORTPASS_ADMIN_IP_WHITELIST` | —— | 逗号分隔的 CIDR 列表，`ipwhitelist` 模式下必填 |
 | `PORTPASS_TRUSTED_PROXIES` | —— | 反代 CIDR；配置后才解析 `X-Forwarded-For` |
 | `PORTPASS_FIREWALL_DRIVER` | `iptables` | `iptables` / `nftables` / `ufw` / `firewalld` / `mock` |
+| `PORTPASS_IPTABLES_BACKEND` | 自动探测 | 仅在 `iptables` 驱动下生效；`legacy` / `nft`，留空则按宿主机活跃后端自动选 |
 | `PORTPASS_DATA_DIR` | `/data` | SQLite 与日志目录 |
 | `PORTPASS_JWT_SECRET` | 随机 | 为空则每次启动重新生成（旧 token 失效） |
 | `PORTPASS_MAX_DURATION_HOURS` | `24` | 单条规则最大有效期 |
@@ -114,11 +115,48 @@ PortPass 把账号体系全部落库（bcrypt hash），鉴权模式只是决定
 
 | 驱动 | 适用场景 | 注意事项 |
 | --- | --- | --- |
-| `iptables` | 通用 Linux，默认选择 | 需要 `iptables` 命令 + `NET_ADMIN`；IPv6 通过 `ip6tables` 自动处理 |
-| `nftables` | 新发行版（Debian 11+、RHEL 9+） | PortPass 独占 `inet portpass` table，与操作员规则互不干扰 |
+| `iptables` | 通用 Linux，默认选择 | 需要 `iptables` 命令 + `NET_ADMIN`；IPv6 通过 `ip6tables` 自动处理；容器启动时自动选用与宿主机一致的 legacy / nft 后端 |
+| `nftables` | 新发行版（Debian 11+、RHEL 9+、Ubuntu 22+） | PortPass 独占 `inet portpass` table，与操作员规则互不干扰 |
 | `ufw` | 已启用 ufw 的 Ubuntu | PortPass 规则以 `# portpass:<id>` 注释可见 |
 | `firewalld` | RHEL / CentOS / Fedora | 使用 `firewall-cmd --add-rich-rule`（运行时，不写入 permanent） |
 | `mock` | 开发/测试 | 仅内存状态，不操作真实防火墙 |
+
+### iptables 后端自动适配
+
+容器底镜像 Alpine 3.23 同时打入了 **`iptables-legacy`** 与 **`iptables-nft`** 两套二进制。容器启动时（`docker-entrypoint.sh`）会自动探测宿主机活跃的 netfilter 后端，识别 firewalld / ufw / docker 创建的标志性链（如 `INPUT_ZONES`、`ufw-input`、`DOCKER-USER`）落在哪一套表里，再把 `iptables` / `iptables-save` / `iptables-restore` / `ip6tables*` 全部软链到对应实现。日志会打印一行：
+
+```
+[portpass-entrypoint] iptables backend = legacy (auto-detected)
+```
+
+无需任何配置即可在 CentOS 7（legacy）和 Debian 12（nft）上同时正常工作。如需手动覆盖（例如调试），传入环境变量：
+
+```bash
+docker run ... -e PORTPASS_IPTABLES_BACKEND=legacy ghcr.io/teacat99/portpass:latest
+# 取值：legacy / nft；其他值会回退为 nft
+```
+
+> **为什么需要这个**：宿主机如果是 CentOS 7 + firewalld，规则全在 iptables-legacy（xtables）那张表上，`INPUT` 链最后一条是 `REJECT`；而 Alpine 3.18+ 镜像默认的 `iptables` 实际是 `iptables-nft`，写到 nft 那张独立表里 —— 自查能成功，但数据包根本不会经过这张表，结果就是"UI 显示规则已生效，外网仍然连不上"。
+
+## 主机系统兼容性
+
+PortPass 仅支持 Linux 主机（Windows / macOS / *BSD 不在支持范围）。下表列出常见发行版的默认情况，使用 `iptables` 驱动 + 自动后端探测时**无需任何额外配置**即可正常工作。
+
+| 发行版 | 内核 | 默认防火墙 | iptables 后端 | 推荐 PortPass 驱动 |
+| --- | --- | --- | --- | --- |
+| CentOS 7 / RHEL 7 | 3.10 | firewalld | **legacy** | `iptables` |
+| CentOS 8 / RHEL 8 / Rocky 8 / AlmaLinux 8 | 4.18 | firewalld（默认 nft） | nft | `iptables` 或 `nftables` |
+| RHEL 9 / Rocky 9 / AlmaLinux 9 / Stream 9 | 5.14 | firewalld（默认 nft） | nft | `iptables` 或 `nftables` |
+| Fedora 36+ | 5.17+ | firewalld（nft） | nft | `iptables` 或 `nftables` |
+| Debian 10 (Buster) | 4.19 | nftables（首个默认 nft 的 Debian） | nft | `iptables` 或 `nftables` |
+| Debian 11 / 12 | 5.10 / 6.1 | nftables | nft | `iptables` 或 `nftables` |
+| Ubuntu 18.04 LTS | 4.15 | ufw（legacy） | **legacy** | `iptables` 或 `ufw` |
+| Ubuntu 20.04 LTS | 5.4 | ufw（legacy 默认，可切 nft） | 取决于 `update-alternatives` | `iptables` 或 `ufw` |
+| Ubuntu 22.04 / 24.04 LTS | 5.15 / 6.8 | ufw（nft） | nft | `iptables` 或 `ufw` 或 `nftables` |
+| OpenWrt 21.02 及之前 | 5.4 及之前 | iptables（fw3） | **legacy** | `iptables` |
+| OpenWrt 22.03+ | 5.10+ | nftables（fw4） | nft | `nftables` |
+
+> 表中"iptables 后端"特指容器需要选择的后端。**legacy** 行均依赖容器的 entrypoint 自动探测，请保持镜像版本 ≥ `v1.1.3`。
 
 ## 可靠性设计
 
