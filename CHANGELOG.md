@@ -4,6 +4,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.1.3] - 2026-04-30
+
+### 修复
+
+- **iptables 后端不一致导致规则不生效**：在 CentOS 7 / RHEL 7 / Ubuntu 18.04 等仍以 `iptables-legacy (xtables)` 为活跃后端的宿主机上，Alpine 3.18+ 镜像默认 `iptables` 实际是 `iptables-nft`，PortPass 写入的 ACCEPT 规则虽然命令成功且 `-C` 自验通过，但写到的是与宿主机互不相通的另一张 nft 表，数据包根本不会经过 → UI 显示"规则已生效"，外网访问仍然被宿主机 firewalld 的 INPUT 末尾 `REJECT` 拦截
+
+### 新增
+
+- **iptables 后端自动适配**：运行时镜像同时打入 `iptables-legacy` 与 `iptables-nft` 两套二进制，新增 `docker-entrypoint.sh`：启动时探测宿主机活跃后端（识别 firewalld / ufw / docker 创建的标志性链 `INPUT_ZONES` / `ufw-input` / `DOCKER-USER` 等落在哪一套表里），自动把容器内的 `iptables` / `iptables-save` / `iptables-restore` / `ip6tables*` 软链到对应实现；日志输出 `[portpass-entrypoint] iptables backend = legacy/nft`
+- **`PORTPASS_IPTABLES_BACKEND` 环境变量**：手动覆盖自动探测，取值 `legacy` / `nft`，留空走自动逻辑
+- **README 系统兼容性矩阵**：中英文 README 新增主流发行版（CentOS 7+/RHEL 7+/Debian 10+/Ubuntu 18.04+/Fedora/OpenWrt 等）默认防火墙、iptables 后端与推荐 PortPass 驱动的对照表
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.1.3
+docker pull ghcr.io/teacat99/portpass:1.1.3
+```
+
+无需任何配置变更：默认行为即"自动选择与宿主机一致的 iptables 后端"。已部署在 CentOS 7 / RHEL 7 / Ubuntu 18.04 等老主机的用户**强烈建议升级**，否则 UI 看上去成功的规则在外网视角实际未生效。
+
+数据库无变更，自动迁移无需手动操作。
+
 ## [1.1.2] - 2026-04-26
 
 ### 新增
@@ -109,6 +132,7 @@ docker pull ghcr.io/teacat99/portpass:1.0.0
 
 数据库由 GORM 自动迁移，无需手动操作。
 
+[1.1.3]: https://github.com/teacat99/PortPass/releases/tag/v1.1.3
 [1.1.2]: https://github.com/teacat99/PortPass/releases/tag/v1.1.2
 [1.1.1]: https://github.com/teacat99/PortPass/releases/tag/v1.1.1
 [1.1.0]: https://github.com/teacat99/PortPass/releases/tag/v1.1.0
