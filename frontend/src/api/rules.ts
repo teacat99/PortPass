@@ -37,6 +37,14 @@ export async function duplicateRule(id: number) {
   return data
 }
 
+// setRuleNotify toggles expiry-notification on an already-created rule.
+// Re-enabling re-snapshots the lead time from current settings and
+// resets both per-channel sent_at marks (parallels the Extend flow).
+export async function setRuleNotify(id: number, enabled: boolean) {
+  const { data } = await client.post<Rule>(`/rules/${id}/notify`, { enabled })
+  return data
+}
+
 export interface HistoryQuery {
   status?: string
   port?: number

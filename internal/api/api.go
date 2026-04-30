@@ -173,6 +173,7 @@ func (s *Server) Router(engine *gin.Engine) {
 	g.POST("/rules/:id/terminate", s.handleTerminateRule)
 	g.POST("/rules/:id/extend", s.handleExtendRule)
 	g.POST("/rules/:id/duplicate", s.handleDuplicateRule)
+	g.POST("/rules/:id/notify", s.handleSetRuleNotify)
 
 	g.GET("/history", s.handleHistory)
 
@@ -576,6 +577,64 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 		Detail: fmt.Sprintf("from rule %d", src.ID),
 	})
 	c.JSON(http.StatusOK, dup)
+}
+
+// notifyReq toggles expiry-notification on an existing rule. Only the
+// enabled flag is configurable from the client; the lead time always
+// snapshots the current runtime setting at the moment of enabling so a
+// later global change does not retroactively move this rule's window.
+type notifyReq struct {
+	Enabled bool `json:"enabled"`
+}
+
+// handleSetRuleNotify flips notify_enabled on an already-created rule.
+// Re-enabling counts as a fresh notification cycle: lead_seconds is
+// re-snapshotted from settings and both per-channel sent_at marks are
+// cleared, mirroring the Extend flow. Disabling leaves lead_seconds /
+// sent_at intact so the operator can re-enable later without losing the
+// audit trail of past pushes.
+func (s *Server) handleSetRuleNotify(c *gin.Context) {
+	id, err := parseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req notifyReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	r, err := s.store.GetRule(id)
+	if err != nil || r == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if !s.ensureRuleVisible(c, r) {
+		return
+	}
+	if r.Status != model.StatusActive && r.Status != model.StatusPending {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rule is not active"})
+		return
+	}
+	prev := r.NotifyEnabled
+	r.NotifyEnabled = req.Enabled
+	if req.Enabled {
+		r.NotifyLeadSeconds = s.rt.NotifyLeadMinutes() * 60
+		r.NotifySentBrowserAt = nil
+		r.NotifySentNtfyAt = nil
+	}
+	if err := s.store.UpdateRule(r); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if prev != r.NotifyEnabled {
+		_, username, _ := auth.Principal(c)
+		_ = s.store.WriteAudit(&model.AuditLog{
+			Action: "notify", RuleID: r.ID, Actor: username, ActorIP: s.clientIP(c),
+			Detail: fmt.Sprintf("enabled=%v lead_seconds=%d", r.NotifyEnabled, r.NotifyLeadSeconds),
+		})
+	}
+	c.JSON(http.StatusOK, r)
 }
 
 func (s *Server) handleHistory(c *gin.Context) {

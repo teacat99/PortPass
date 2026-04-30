@@ -7,8 +7,9 @@ import {
   RefreshCw, Plus, XCircle, Clock, Copy, Search as SearchIcon,
   Bell, BellOff
 } from 'lucide-vue-next'
-import { duplicateRule, extendRule, terminateRule } from '@/api/rules'
+import { duplicateRule, extendRule, setRuleNotify, terminateRule } from '@/api/rules'
 import { useRulesStore } from '@/stores/rules'
+import { useNotifyStore } from '@/stores/notify'
 import type { Rule } from '@/api/types'
 import { Message } from '@/lib/toast'
 
@@ -31,6 +32,13 @@ import {
 const { t } = useI18n()
 const router = useRouter()
 const store = useRulesStore()
+const notifyStore = useNotifyStore()
+
+// notifyToggling tracks the per-row in-flight set. We block re-clicks
+// on the same rule until the round-trip resolves, otherwise rapid
+// double-clicks would spawn two independent permission prompts and
+// race the audit log.
+const notifyToggling = ref<Set<number>>(new Set())
 
 const extendVisible = ref(false)
 const extendTarget = ref<Rule | null>(null)
@@ -107,6 +115,63 @@ function notifyTooltip(r: Rule): string {
   }
   const leadMin = Math.max(1, Math.round((r.notify_lead_seconds || 0) / 60))
   return t('rules.notifyOn', { n: leadMin })
+}
+
+// ensureBrowserNotifyPermission mirrors the HomeView gating logic but
+// keeps the result structured so callers can decide how to surface the
+// failure (HomeView shows an inline hint, RulesView uses a toast).
+async function ensureBrowserNotifyPermission(): Promise<{ ok: boolean; reason?: string }> {
+  if (typeof Notification === 'undefined') {
+    return { ok: false, reason: t('home.notifyPermissionUnsupported') }
+  }
+  if (!window.isSecureContext && location.hostname !== 'localhost') {
+    return { ok: false, reason: t('home.notifyContextInsecure') }
+  }
+  if (Notification.permission === 'granted') return { ok: true }
+  if (Notification.permission === 'denied') {
+    return { ok: false, reason: t('home.notifyPermissionDenied') }
+  }
+  let result: NotificationPermission = 'default'
+  try {
+    result = await Notification.requestPermission()
+  } catch {
+    return { ok: false, reason: t('home.notifyPermissionUnsupported') }
+  }
+  return result === 'granted'
+    ? { ok: true }
+    : { ok: false, reason: t('home.notifyPermissionDenied') }
+}
+
+// toggleNotify flips notify_enabled on a rule via the backend, gating
+// the UI on a per-row in-flight set so rapid double-clicks don't spawn
+// two permission prompts. When turning on under the browser channel we
+// prompt for permission first; if the channel is "both" we still allow
+// the flip even if the browser permission is denied (ntfy will deliver),
+// and just surface a warning toast so the operator knows.
+async function toggleNotify(r: Rule) {
+  if (notifyToggling.value.has(r.id)) return
+  notifyToggling.value.add(r.id)
+  try {
+    const next = !r.notify_enabled
+    if (next) {
+      const channels = notifyStore.settings?.channels ?? 'browser'
+      if (channels === 'browser' || channels === 'both') {
+        const perm = await ensureBrowserNotifyPermission()
+        if (!perm.ok) {
+          if (channels === 'browser') {
+            Message.warning(perm.reason || t('home.notifyPermissionDenied'))
+            return
+          }
+          Message.warning(perm.reason || t('home.notifyPermissionDenied'))
+        }
+      }
+    }
+    await setRuleNotify(r.id, next)
+    Message.success(next ? t('msg.ruleNotifyEnabled') : t('msg.ruleNotifyDisabled'))
+    await store.reload()
+  } finally {
+    notifyToggling.value.delete(r.id)
+  }
 }
 </script>
 
@@ -238,25 +303,35 @@ function notifyTooltip(r: Rule): string {
               <TableCell class="text-right whitespace-nowrap">
                 <div class="inline-flex gap-0.5 items-center">
                   <!--
-                    Notification status indicator. Non-interactive (the
-                    bell can only be flipped at create time on HomeView)
-                    but rendered with the same size-8 footprint as the
-                    real action buttons so the icon row stays vertically
-                    aligned.
+                    Notification toggle. Same size-8 footprint as the
+                    other action buttons; clicking flips notify_enabled
+                    via PATCH /api/rules/:id/notify. When turning on
+                    under a browser-capable channel we first request the
+                    Notification permission so the next push window
+                    actually fires.
                   -->
                   <Tooltip>
                     <TooltipTrigger as-child>
-                      <span
-                        class="inline-flex size-8 items-center justify-center rounded-md"
-                        :class="r.notify_enabled ? 'text-primary' : 'text-muted-foreground/40'"
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="size-8"
+                        :class="r.notify_enabled ? 'text-primary hover:text-primary' : 'text-muted-foreground/60'"
+                        :disabled="notifyToggling.has(r.id)"
                         :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
+                        @click="toggleNotify(r)"
                       >
                         <Bell v-if="r.notify_enabled" class="size-4" />
                         <BellOff v-else class="size-4" />
-                      </span>
+                      </Button>
                     </TooltipTrigger>
-                    <TooltipContent>
-                      {{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}
+                    <TooltipContent class="max-w-xs">
+                      <div>{{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}</div>
+                      <div class="text-[11px] mt-0.5 opacity-90">
+                        {{ r.notify_enabled
+                          ? t('rules.notifyClickToDisable')
+                          : t('rules.notifyClickToEnable') }}
+                      </div>
                     </TooltipContent>
                   </Tooltip>
                   <Tooltip>
@@ -308,21 +383,26 @@ function notifyTooltip(r: Rule): string {
               <Badge :variant="protoVariant(r.protocol)" class="text-[10px]">
                 {{ r.protocol.toUpperCase() }}
               </Badge>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <span
-                    class="inline-flex items-center"
-                    :class="r.notify_enabled ? 'text-primary' : 'text-muted-foreground/50'"
-                    :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
-                  >
-                    <Bell v-if="r.notify_enabled" class="size-3.5" />
-                    <BellOff v-else class="size-3.5" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}
-                </TooltipContent>
-              </Tooltip>
+              <!--
+                Mobile bell is a tap-target rather than a static icon so
+                operators can flip the reminder mid-rule from a phone.
+                Visual treatment kept compact (size-7) to fit alongside
+                the port/protocol cluster instead of stealing the action
+                row at the bottom of the card.
+              -->
+              <button
+                type="button"
+                class="inline-flex size-7 items-center justify-center rounded-md transition-colors disabled:opacity-50"
+                :class="r.notify_enabled
+                  ? 'text-primary hover:bg-primary/10'
+                  : 'text-muted-foreground/60 hover:bg-muted'"
+                :disabled="notifyToggling.has(r.id)"
+                :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
+                @click="toggleNotify(r)"
+              >
+                <Bell v-if="r.notify_enabled" class="size-3.5" />
+                <BellOff v-else class="size-3.5" />
+              </button>
             </div>
             <CountdownChip :expire-at="r.expire_at" :created-at="r.created_at" size="small" />
           </div>

@@ -4,6 +4,27 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.2.2] - 2026-04-30
+
+### 新增
+
+- **规则列表里直接切换到期提醒**：规则页每行铃铛图标改为可点击的 toggle，PC 操作列与手机卡片均支持；点击切换会即时落库并按当前推送方式做权限校验
+  - 后端新增 `POST /api/rules/:id/notify`（body `{enabled: bool}`），仅规则可见者（admin 或创建者）且规则处于 `active` / `pending` 状态才能调用
+  - 重新开启时**重新快照** `notify_lead_seconds` 为当前 settings 的提前分钟数 ×60，并清空 `notify_sent_browser_at` / `notify_sent_ntfy_at`，确保接下来的到期窗口能完整再推送一次（与 Extend 行为一致）
+  - 关闭时保留 `lead_seconds` 与 `sent_*_at`，留作历史，下次重启会被覆盖
+  - 写入 `audit_logs.action=notify` 记录每次切换的执行者与新状态
+- **前端 toggle 客户端逻辑**：开启时若推送方式包含浏览器，主动调 `Notification.requestPermission()`，被拒时给出 toast 提示；选了"浏览器 + ntfy"被浏览器拒时**仍允许开启**（ntfy 仍然能推送），仅以警告 toast 告知；纯浏览器通道被拒则中止此次开启操作
+- **同规则点击节流**：每条规则维护独立的 in-flight set，重复点击在请求未返回前禁用，避免连续点击触发多个权限提示与并发审计
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.2.2
+docker pull ghcr.io/teacat99/portpass:1.2.2
+```
+
+无数据库 schema 变更，仅新增一个 API 路由，可直接平滑升级。
+
 ## [1.2.1] - 2026-04-30
 
 ### 优化

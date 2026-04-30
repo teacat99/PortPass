@@ -229,7 +229,9 @@ export default {
     extendAmount: 'Extend by',
     notifyOn: 'Will push a reminder {n} min before expiry',
     notifyOff: 'No expiry reminder',
-    notifyAlreadySent: 'Already notified at {time}'
+    notifyAlreadySent: 'Already notified at {time}',
+    notifyClickToEnable: 'Click to enable expiry reminder',
+    notifyClickToDisable: 'Click to disable expiry reminder'
   },
   history: {
     title: 'History',
@@ -460,6 +462,8 @@ export default {
     ruleTerminated: 'Rule terminated',
     ruleExtended: 'Rule extended',
     ruleDuplicated: 'Rule duplicated',
+    ruleNotifyEnabled: 'Expiry reminder enabled',
+    ruleNotifyDisabled: 'Expiry reminder disabled',
     presetSaved: 'Preset saved',
     presetDeleted: 'Preset deleted',
     userCreated: 'User created',

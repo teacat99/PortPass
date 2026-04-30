@@ -229,7 +229,9 @@ export default {
     extendAmount: '延长时长',
     notifyOn: '到期前 {n} 分钟会推送提醒',
     notifyOff: '到期不会推送提醒',
-    notifyAlreadySent: '已在 {time} 推送过临期提醒'
+    notifyAlreadySent: '已在 {time} 推送过临期提醒',
+    notifyClickToEnable: '点击开启到期提醒',
+    notifyClickToDisable: '点击关闭到期提醒'
   },
   history: {
     title: '历史记录',
@@ -460,6 +462,8 @@ export default {
     ruleTerminated: '规则已终止',
     ruleExtended: '规则已延长',
     ruleDuplicated: '规则已复制',
+    ruleNotifyEnabled: '已开启到期提醒',
+    ruleNotifyDisabled: '已关闭到期提醒',
     presetSaved: '预设已保存',
     presetDeleted: '预设已删除',
     userCreated: '用户已创建',
