@@ -82,6 +82,12 @@ func main() {
 	notifier := notify.New(rt)
 	captchaSvc := captcha.New(rt, s)
 
+	// Expiry-notification watcher: independent 30s cadence so the
+	// ntfy push pipeline runs even when nobody has the UI open.
+	expiryWatcher := notify.NewExpiryWatcher(rt, s, notifier, 30*time.Second)
+	expiryWatcher.Start(ctx)
+	defer expiryWatcher.Stop()
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())

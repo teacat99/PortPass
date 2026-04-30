@@ -305,6 +305,72 @@ func (s *Store) ListRulesByUser(uid uint) ([]model.Rule, error) {
 	return out, err
 }
 
+// NotifyChannel is a string-typed enum used by the store APIs to
+// identify which per-channel sent_at column to query / update. The
+// rule row tracks browser and ntfy independently because the operator
+// might pick the "browser + ntfy" channel mode, in which case both
+// pipelines must fire even when one of them happens to mark the
+// row first.
+type NotifyChannel string
+
+const (
+	NotifyChannelBrowser NotifyChannel = "browser"
+	NotifyChannelNtfy    NotifyChannel = "ntfy"
+)
+
+func (c NotifyChannel) sentColumn() string {
+	if c == NotifyChannelNtfy {
+		return "notify_sent_ntfy_at"
+	}
+	return "notify_sent_browser_at"
+}
+
+// ListPendingNotify returns rules eligible for an "imminent expiry"
+// notification on the given channel: status active|pending, opt-in via
+// NotifyEnabled, not yet notified on this channel (the per-channel
+// sent_at IS NULL), and the configured lead time has elapsed (now >=
+// expire_at - lead). The window upper bound (expire_at > now) keeps
+// already-expired rules out so we never push a useless "rule expired"
+// message after the fact. uid==0 means "no user filter" (used by the
+// ntfy watcher); a non-zero uid restricts the result to that user
+// (used by the browser-poll endpoint).
+func (s *Store) ListPendingNotify(uid uint, channel NotifyChannel, now time.Time) ([]model.Rule, error) {
+	var out []model.Rule
+	col := channel.sentColumn()
+	q := s.db.Where("status IN ? AND notify_enabled = ?",
+		[]string{model.StatusActive, model.StatusPending}, true).
+		Where(col + " IS NULL").
+		Where("expire_at > ?", now).
+		// SQLite stores time.Time as ISO-8601 strings; arithmetic via
+		// julianday lets us compare "expire_at - lead seconds" against
+		// `now` without depending on the SQLite extension.
+		Where("(julianday(expire_at) - (notify_lead_seconds * 1.0 / 86400.0)) <= julianday(?)", now)
+	if uid != 0 {
+		q = q.Where("user_id = ?", uid)
+	}
+	err := q.Order("expire_at ASC").Find(&out).Error
+	return out, err
+}
+
+// MarkNotifySent stamps the channel-scoped sent_at column to `at` on
+// every rule in ids that is owned by uid (a guard so an attacker
+// forging another user's rule id cannot suppress that user's
+// notifications). uid==0 disables the owner check so the ntfy watcher
+// can mark any rule. Returns the number of rows actually updated.
+func (s *Store) MarkNotifySent(ids []uint, channel NotifyChannel, uid uint, at time.Time) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	col := channel.sentColumn()
+	q := s.db.Model(&model.Rule{}).
+		Where("id IN ? AND "+col+" IS NULL", ids)
+	if uid != 0 {
+		q = q.Where("user_id = ?", uid)
+	}
+	res := q.Update(col, at)
+	return res.RowsAffected, res.Error
+}
+
 // ListAllRules returns every row with optional filters; used by the rules
 // page and history page.
 func (s *Store) ListAllRules(filter RuleFilter) ([]model.Rule, int64, error) {

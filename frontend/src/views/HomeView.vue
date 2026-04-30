@@ -3,11 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
-import { CheckCircle2, Lock, ArrowRight, RotateCcw, Clock } from 'lucide-vue-next'
+import { CheckCircle2, Lock, ArrowRight, RotateCcw, Clock, Bell, BellOff } from 'lucide-vue-next'
 import { createRule, fetchClientIP, listPresetCategories, listPresets } from '@/api/rules'
 import type { CreateRulePayload, PresetCategory, PresetPort, Rule } from '@/api/types'
 import { useRulesStore } from '@/stores/rules'
 import { useAuthStore } from '@/stores/auth'
+import { useNotifyStore } from '@/stores/notify'
 import { groupPresetsBy } from '@/utils/presetCategory'
 import { isImageIcon } from '@/utils/presetIcon'
 import { parsePortSet } from '@/utils/portset'
@@ -26,6 +27,7 @@ const { t } = useI18n()
 const router = useRouter()
 const store = useRulesStore()
 const auth = useAuthStore()
+const notifyStore = useNotifyStore()
 
 const clientIP = ref<string>('')
 const ipLoading = ref(true)
@@ -34,6 +36,11 @@ const presetCategories = ref<PresetCategory[]>([])
 const presetsLoading = ref(true)
 const submitting = ref(false)
 const lastResult = ref<Rule | null>(null)
+// notifyHint surfaces a one-line inline status under the bell switch:
+// it tells the operator whether their click on the bell actually
+// resulted in a working browser notification path, since the popup
+// from requestPermission() is async + may be blocked by site policy.
+const notifyHint = ref<{ kind: 'info' | 'warn'; text: string } | null>(null)
 
 const form = ref({
   sourceMode: 'current' as 'current' | 'any' | 'manual',
@@ -42,7 +49,8 @@ const form = ref({
   protocol: 'tcp' as 'tcp' | 'udp' | 'both',
   durationPreset: 60 * 60 as number | undefined,
   customExpire: undefined as string | undefined,
-  note: ''
+  note: '',
+  notifyEnabled: false
 })
 // Initial validity reflects an empty ports string (invalid unless allowEmpty).
 const portsValidation = ref<{ ok: boolean, error: string | null }>({ ok: false, error: null })
@@ -147,6 +155,96 @@ onMounted(async () => {
     presetCategories.value = cats
   } catch { /* ditto */ }
   finally { presetsLoading.value = false }
+
+  // Pull the global default for the bell so HomeView reflects the
+  // operator's preference. Done after presets so the form reactivity
+  // settles in one tick rather than two.
+  if (notifyStore.settings == null) await notifyStore.loadSettings()
+  if (notifyStore.settings != null) {
+    form.value.notifyEnabled = notifyStore.settings.default_enabled
+    if (form.value.notifyEnabled) {
+      // Default-on means we should *try* to ensure permission upfront
+      // so the user isn't surprised by a denied push on the first
+      // expiring rule. We only ask when permission is still 'default'.
+      void ensureNotifyPermission(/* silentWhenAlreadyResolved */ true)
+    }
+  }
+})
+
+// notifyAvailability returns the current state of the browser's
+// Notification API: whether it exists at all, the page is in a secure
+// context, and the user has granted/denied permission. Used both to
+// gate the requestPermission() call and to render an accurate hint.
+function notifyAvailability(): {
+  unsupported: boolean
+  insecure: boolean
+  permission: NotificationPermission | 'unsupported'
+} {
+  if (typeof Notification === 'undefined') {
+    return { unsupported: true, insecure: false, permission: 'unsupported' }
+  }
+  if (!window.isSecureContext && location.hostname !== 'localhost') {
+    return { unsupported: false, insecure: true, permission: Notification.permission }
+  }
+  return { unsupported: false, insecure: false, permission: Notification.permission }
+}
+
+async function ensureNotifyPermission(silentWhenAlreadyResolved = false) {
+  const a = notifyAvailability()
+  if (a.unsupported) {
+    notifyHint.value = { kind: 'warn', text: t('home.notifyPermissionUnsupported') }
+    form.value.notifyEnabled = false
+    return false
+  }
+  if (a.insecure) {
+    notifyHint.value = { kind: 'warn', text: t('home.notifyContextInsecure') }
+    return false
+  }
+  if (a.permission === 'granted') {
+    if (!silentWhenAlreadyResolved) notifyHint.value = null
+    return true
+  }
+  if (a.permission === 'denied') {
+    notifyHint.value = { kind: 'warn', text: t('home.notifyPermissionDenied') }
+    return false
+  }
+  // permission === 'default' → user has not been asked yet.
+  let result: NotificationPermission = 'default'
+  try {
+    result = await Notification.requestPermission()
+  } catch {
+    notifyHint.value = { kind: 'warn', text: t('home.notifyPermissionUnsupported') }
+    form.value.notifyEnabled = false
+    return false
+  }
+  if (result === 'granted') {
+    notifyHint.value = null
+    return true
+  }
+  notifyHint.value = { kind: 'warn', text: t('home.notifyPermissionDenied') }
+  return false
+}
+
+async function onToggleNotify() {
+  const next = !form.value.notifyEnabled
+  form.value.notifyEnabled = next
+  notifyHint.value = null
+  if (!next) return
+  const channel = notifyStore.settings?.channels ?? 'browser'
+  // For ntfy-only the toggle has no permission requirement; we just
+  // accept the click and let the backend deliver. For browser/both
+  // we must hold a granted permission, otherwise the push will silently
+  // drop later.
+  if (channel === 'ntfy') return
+  await ensureNotifyPermission()
+}
+
+const notifyLeadMinutes = computed(() => notifyStore.settings?.lead_minutes ?? 5)
+const notifyChannelsLabel = computed(() => {
+  const c = notifyStore.settings?.channels
+  if (c === 'ntfy') return t('settings.runtime.notifyChannelNtfy')
+  if (c === 'both') return t('settings.runtime.notifyChannelBoth')
+  return t('settings.runtime.notifyChannelBrowser')
 })
 
 function applyPreset(p: PresetPort) {
@@ -199,7 +297,8 @@ async function submit() {
         ? '0.0.0.0/0'
         : (form.value.sourceMode === 'manual' ? form.value.manualSource.trim() : undefined),
       duration_sec: form.value.customExpire ? undefined : form.value.durationPreset,
-      expire_at: form.value.customExpire ? dayjs(form.value.customExpire).toISOString() : undefined
+      expire_at: form.value.customExpire ? dayjs(form.value.customExpire).toISOString() : undefined,
+      notify_enabled: form.value.notifyEnabled
     }
     const r = await createRule(payload)
     lastResult.value = r
@@ -434,6 +533,51 @@ const sourceOptions = computed<SourceOpt[]>(() => [
           :placeholder="t('home.notePlaceholder')"
           class="min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
         />
+      </div>
+
+      <!-- Notify toggle -->
+      <div class="flex flex-col gap-2">
+        <h3 class="pp-section-title">{{ t('home.notifyTitle') }}</h3>
+        <button
+          type="button"
+          class="flex items-center gap-3 rounded-md border px-4 py-3 text-left transition-all"
+          :class="form.notifyEnabled
+            ? 'border-primary bg-primary/10 text-foreground'
+            : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50 hover:bg-primary/5'"
+          @click="onToggleNotify"
+        >
+          <span
+            class="flex size-9 items-center justify-center rounded-full shrink-0"
+            :class="form.notifyEnabled
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground'"
+          >
+            <Bell v-if="form.notifyEnabled" class="size-4" />
+            <BellOff v-else class="size-4" />
+          </span>
+          <span class="flex flex-col gap-0.5 min-w-0">
+            <span class="text-sm font-medium">
+              {{ form.notifyEnabled
+                ? t('home.notifyOn', { n: notifyLeadMinutes })
+                : t('home.notifyOff') }}
+            </span>
+            <span class="text-[11px] text-muted-foreground/90 truncate">
+              {{ form.notifyEnabled
+                ? t('home.notifyChannelHint', { channels: notifyChannelsLabel })
+                : t('home.notifyOnHint', { n: notifyLeadMinutes }) }}
+            </span>
+          </span>
+        </button>
+        <div
+          v-if="notifyHint"
+          class="flex items-center gap-2 text-xs rounded-md px-3 py-2"
+          :class="notifyHint.kind === 'warn'
+            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+            : 'bg-muted/50 text-muted-foreground'"
+        >
+          <Bell class="size-3.5" />
+          <span>{{ notifyHint.text }}</span>
+        </div>
       </div>
 
       <!-- Submit (desktop inline) -->

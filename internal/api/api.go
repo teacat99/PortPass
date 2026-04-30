@@ -221,6 +221,21 @@ func (s *Server) Router(engine *gin.Engine) {
 
 	// Ntfy push: synchronous test hook so the operator can validate URL.
 	g.POST("/notify/test", s.handleTestNotify)
+
+	// Expiry-notification polling. Browser tabs hit /pending every ~30s
+	// to fetch their own rules whose lead-time threshold has elapsed
+	// but were not yet flagged as notified, then ack the IDs they
+	// successfully showed via Notification API. Per-rule scoping is
+	// done inside the handlers (always limited to the caller's user_id).
+	g.GET("/notify/pending", s.handleNotifyPending)
+	g.POST("/notify/ack", s.handleNotifyAck)
+
+	// Public-ish view of the three notify settings every user needs in
+	// order to render the bell toggle and the polling loop. We split
+	// this out from /runtime-settings (admin-only) so non-admin users
+	// can still see the defaults and the lead time without leaking the
+	// full runtime configuration surface.
+	g.GET("/notify/settings", s.handleNotifySettings)
 }
 
 // clientIP is the single choke-point for extracting the trusted client IP.
@@ -250,6 +265,13 @@ type createRuleReq struct {
 	DurationSec int    `json:"duration_sec"`
 	ExpireAt    string `json:"expire_at"`
 	Note        string `json:"note"`
+	// NotifyEnabled toggles the expiry-notification feature for this
+	// rule. When true the lead time is snapshotted from the current
+	// runtime.NotifyLeadMinutes() setting, so future setting changes
+	// don't affect rules already created. The pointer differentiates
+	// "unspecified by client" (use server default) from "explicitly
+	// false" (opt out even when the default is on).
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
 }
 
 // handleCreateRule creates, persists and schedules a new firewall rule. It
@@ -312,18 +334,28 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 		return
 	}
 
+	notifyEnabled := s.rt.NotifyDefaultEnabled()
+	if req.NotifyEnabled != nil {
+		notifyEnabled = *req.NotifyEnabled
+	}
+	notifyLead := 0
+	if notifyEnabled {
+		notifyLead = s.rt.NotifyLeadMinutes() * 60
+	}
 	rule := &model.Rule{
-		UserID:    uid,
-		SourceIP:  source,
-		Port:      ps.First(),
-		Ports:     ps.String(),
-		Protocol:  proto,
-		Note:      req.Note,
-		Status:    model.StatusPending,
-		ExpireAt:  expireAt,
-		CreatedBy: username,
-		CreatedIP: clientIP,
-		CreatedAt: time.Now(),
+		UserID:            uid,
+		SourceIP:          source,
+		Port:              ps.First(),
+		Ports:             ps.String(),
+		Protocol:          proto,
+		Note:              req.Note,
+		Status:            model.StatusPending,
+		ExpireAt:          expireAt,
+		CreatedBy:         username,
+		CreatedIP:         clientIP,
+		CreatedAt:         time.Now(),
+		NotifyEnabled:     notifyEnabled,
+		NotifyLeadSeconds: notifyLead,
 	}
 	if err := s.store.CreateRule(rule); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -470,6 +502,11 @@ func (s *Server) handleExtendRule(c *gin.Context) {
 	if _, ok := s.ensurePortPolicy(c, rps, r.Protocol, remaining); !ok {
 		return
 	}
+	// Extending starts a fresh notification cycle: clear both per-channel
+	// sent_at marks so the browser poll and ntfy watcher both fire again
+	// before the *new* expiry.
+	r.NotifySentBrowserAt = nil
+	r.NotifySentNtfyAt = nil
 	if err := s.lifecycle.Extend(r, newExpire); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -514,11 +551,17 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 	if _, ok := s.ensurePortPolicy(c, rps, src.Protocol, durationForPolicy); !ok {
 		return
 	}
+	dupNotifyLead := 0
+	if src.NotifyEnabled {
+		dupNotifyLead = s.rt.NotifyLeadMinutes() * 60
+	}
 	dup := &model.Rule{
 		UserID: uid, SourceIP: src.SourceIP, Port: src.Port, Ports: src.Ports,
 		Protocol: src.Protocol, Note: src.Note,
 		Status: model.StatusPending, ExpireAt: expireAt, CreatedBy: username,
 		CreatedIP: clientIP, CreatedAt: time.Now(),
+		NotifyEnabled:     src.NotifyEnabled,
+		NotifyLeadSeconds: dupNotifyLead,
 	}
 	if err := s.store.CreateRule(dup); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -878,6 +921,73 @@ func (s *Server) handleIssueCaptcha(c *gin.Context) {
 	}
 	id, q := s.captcha.Issue()
 	c.JSON(http.StatusOK, gin.H{"id": id, "question": q})
+}
+
+// handleNotifyPending returns rules belonging to the caller that are
+// inside their pre-expiry notification window and not yet acknowledged.
+// The browser tab polls this every ~30s and pops a Notification for
+// every entry. Returns an empty list when the global channel selector
+// excludes the browser (in that case ntfy is doing all the work and
+// the UI doesn't need to chime).
+func (s *Server) handleNotifyPending(c *gin.Context) {
+	if !s.rt.NotifyChannelIncludes(runtime.NotifyChannelBrowser) {
+		c.JSON(http.StatusOK, gin.H{"rules": []any{}})
+		return
+	}
+	uid, _, _ := auth.Principal(c)
+	if uid == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	rules, err := s.store.ListPendingNotify(uid, store.NotifyChannelBrowser, time.Now())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"rules": rules})
+}
+
+type notifyAckReq struct {
+	RuleIDs []uint `json:"rule_ids"`
+}
+
+// handleNotifyAck stamps notify_sent_at on the supplied rule IDs after
+// the browser has shown its local Notification. Scoped to the caller's
+// own rules so a malicious user cannot suppress someone else's pushes.
+func (s *Server) handleNotifyAck(c *gin.Context) {
+	uid, _, _ := auth.Principal(c)
+	if uid == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		return
+	}
+	var req notifyAckReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.RuleIDs) == 0 {
+		c.JSON(http.StatusOK, gin.H{"updated": 0})
+		return
+	}
+	n, err := s.store.MarkNotifySent(req.RuleIDs, store.NotifyChannelBrowser, uid, time.Now())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"updated": n})
+}
+
+// handleNotifySettings returns just the three "expiry notification"
+// settings every authenticated user needs to render the bell toggle
+// and run the browser-side polling loop. The full runtime-settings
+// endpoint is admin-only on purpose; this carve-out keeps the
+// "viewable by users" surface minimal.
+func (s *Server) handleNotifySettings(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"lead_minutes":    s.rt.NotifyLeadMinutes(),
+		"channels":        s.rt.NotifyChannels(),
+		"default_enabled": s.rt.NotifyDefaultEnabled(),
+	})
 }
 
 // handleTestNotify fires one synchronous push so the operator gets

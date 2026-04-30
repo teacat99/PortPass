@@ -177,6 +177,16 @@ export default {
     note: '备注',
     notePlaceholder: '可选 — 例如 "团队成员 SSH 调试"',
 
+    notifyTitle: '到期提醒',
+    notifyOn: '已开启 · 到期前 {n} 分钟提醒',
+    notifyOff: '关闭 · 到期不会通知',
+    notifyOnHint: '在规则到期前 {n} 分钟通过浏览器/ntfy 推送提醒',
+    notifyPermissionAsk: '已请求浏览器通知权限',
+    notifyPermissionDenied: '浏览器通知权限被拒绝，仍可通过 ntfy 推送',
+    notifyPermissionUnsupported: '当前浏览器不支持通知 API',
+    notifyContextInsecure: '该页面非 HTTPS / localhost，浏览器禁用 Notification 接口',
+    notifyChannelHint: '当前推送方式：{channels}',
+
     submit: '立即开放',
     submitting: '正在下发到防火墙...',
 
@@ -216,7 +226,10 @@ export default {
     actions: '操作',
     terminateConfirm: '确定要立即终止该规则吗？',
     extendDialog: '延长有效期',
-    extendAmount: '延长时长'
+    extendAmount: '延长时长',
+    notifyOn: '到期前 {n} 分钟会推送提醒',
+    notifyOff: '到期不会推送提醒',
+    notifyAlreadySent: '已在 {time} 推送过临期提醒'
   },
   history: {
     title: '历史记录',
@@ -352,7 +365,18 @@ export default {
       ntfyTopicHelp: '订阅者通过该主题接收推送；为空表示禁用',
       ntfyToken: '访问令牌',
       ntfyTokenHelp: '需要鉴权的私有 ntfy 才填写；留空保持不变',
-      notConfigured: '未配置'
+      notConfigured: '未配置',
+      sectionExpiryNotify: '到期提醒（规则即将到期推送）',
+      notifyLeadMinutes: '提前提醒时间',
+      notifyLeadMinutesHelp: '规则到期前多少分钟开始推送（1–1440 分钟）',
+      notifyChannels: '推送方式',
+      notifyChannelsHelp: '浏览器需要授权 Notification 权限；ntfy 需要先填妥上方主题与服务地址',
+      notifyChannelBrowser: '仅浏览器',
+      notifyChannelNtfy: '仅 ntfy',
+      notifyChannelBoth: '浏览器 + ntfy',
+      notifyDefaultEnabled: '新规则默认开启提醒',
+      notifyDefaultEnabledHelp: '影响首页表单上的铃铛默认状态；既有规则不受影响',
+      notifyChannelsRequiresNtfy: '所选推送方式包含 ntfy，但 ntfy 服务地址或主题尚未填写'
     },
     notify: {
       test: '发送测试',
@@ -445,6 +469,12 @@ export default {
     invalidInput: '输入无效',
     saved: '已保存',
     deleted: '已删除'
+  },
+  notify: {
+    expiryTitle: 'PortPass · 规则即将到期',
+    expiryBody: '{source} → {ports}/{protocol} 剩余 {remaining}',
+    expiryRemainingMin: '{m} 分 {s} 秒',
+    expiryRemainingSec: '{s} 秒'
   }
 }
 

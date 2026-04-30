@@ -177,6 +177,16 @@ export default {
     note: 'Note',
     notePlaceholder: 'Optional — e.g. "team SSH debug"',
 
+    notifyTitle: 'Expiry reminder',
+    notifyOn: 'On · alert {n} min before expiry',
+    notifyOff: 'Off · silent on expiry',
+    notifyOnHint: 'Push a reminder via browser/ntfy {n} minutes before this rule expires',
+    notifyPermissionAsk: 'Browser notification permission requested',
+    notifyPermissionDenied: 'Browser notifications were blocked; ntfy still works',
+    notifyPermissionUnsupported: 'Notification API is not available in this browser',
+    notifyContextInsecure: 'Notification API is disabled because this page is not HTTPS / localhost',
+    notifyChannelHint: 'Active push channels: {channels}',
+
     submit: 'Open it now',
     submitting: 'Pushing to firewall...',
 
@@ -216,7 +226,10 @@ export default {
     actions: 'Actions',
     terminateConfirm: 'Terminate this rule now?',
     extendDialog: 'Extend expiry',
-    extendAmount: 'Extend by'
+    extendAmount: 'Extend by',
+    notifyOn: 'Will push a reminder {n} min before expiry',
+    notifyOff: 'No expiry reminder',
+    notifyAlreadySent: 'Already notified at {time}'
   },
   history: {
     title: 'History',
@@ -352,7 +365,18 @@ export default {
       ntfyTopicHelp: 'Subscribers receive pushes via this topic; empty disables ntfy',
       ntfyToken: 'Access token',
       ntfyTokenHelp: 'Only required for protected ntfy servers; leave blank to keep current',
-      notConfigured: 'Not configured'
+      notConfigured: 'Not configured',
+      sectionExpiryNotify: 'Expiry reminder (push when a rule is about to expire)',
+      notifyLeadMinutes: 'Lead time',
+      notifyLeadMinutesHelp: 'How many minutes before expiry the reminder fires (1–1440 min)',
+      notifyChannels: 'Push channels',
+      notifyChannelsHelp: 'Browser needs the user to grant the Notification permission; ntfy needs the URL/topic above to be filled in.',
+      notifyChannelBrowser: 'Browser only',
+      notifyChannelNtfy: 'ntfy only',
+      notifyChannelBoth: 'Browser + ntfy',
+      notifyDefaultEnabled: 'Bell on by default for new rules',
+      notifyDefaultEnabledHelp: 'Affects the default state of the bell on the home form; existing rules are not changed',
+      notifyChannelsRequiresNtfy: 'The selected channel includes ntfy but the ntfy URL or topic is empty'
     },
     notify: {
       test: 'Send test',
@@ -445,5 +469,11 @@ export default {
     invalidInput: 'Invalid input',
     saved: 'Saved',
     deleted: 'Deleted'
+  },
+  notify: {
+    expiryTitle: 'PortPass · rule expiring soon',
+    expiryBody: '{source} → {ports}/{protocol}, {remaining} left',
+    expiryRemainingMin: '{m}m {s}s',
+    expiryRemainingSec: '{s}s'
   }
 }

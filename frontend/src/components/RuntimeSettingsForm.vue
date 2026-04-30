@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bell, RotateCcw, Save, Send, Shield, ShieldCheck, Sliders } from 'lucide-vue-next'
+import { BellRing, Bell, RotateCcw, Save, Send, Shield, ShieldCheck, Sliders } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from '@/components/ui/select'
 import { Message } from '@/lib/toast'
 import {
   fetchRuntimeSettings,
@@ -53,6 +57,9 @@ function emptyForm(): FormState {
     ntfy_url: '',
     ntfy_topic: '',
     ntfy_token: '',
+    notify_lead_minutes: '',
+    notify_channels: '',
+    notify_default_enabled: '',
   }
 }
 
@@ -182,6 +189,15 @@ const ntfyTokenPlaceholder = computed(() => {
   const masked = (bundle.value?.settings.ntfy_token ?? '') as string
   return masked || '••••'
 })
+
+// Two-way bridge between the form's string-typed
+// `notify_default_enabled` ('true' | 'false') and the boolean shape
+// the Switch component speaks. Keeping the form fully stringy means
+// the diff/PUT path treats this knob the same way as the rest.
+const notifyDefaultEnabledBool = computed<boolean>({
+  get: () => form.notify_default_enabled === 'true',
+  set: (v: boolean) => { form.notify_default_enabled = v ? 'true' : 'false' }
+})
 </script>
 
 <template>
@@ -307,6 +323,62 @@ const ntfyTokenPlaceholder = computed(() => {
             class="h-9 font-mono text-xs"
           />
           <span v-if="f.help" class="text-xs text-muted-foreground">{{ t(f.help) }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Expiry-notification (browser / ntfy) -->
+    <section class="rounded-lg border border-border bg-card p-4 flex flex-col gap-3">
+      <header class="flex items-center gap-2">
+        <BellRing class="size-4 text-primary" />
+        <h4 class="text-sm font-semibold">{{ t('settings.runtime.sectionExpiryNotify') }}</h4>
+      </header>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
+        <div class="flex flex-col gap-1.5">
+          <Label for="rt-notify_lead_minutes" class="text-xs font-medium">
+            {{ t('settings.runtime.notifyLeadMinutes') }}
+          </Label>
+          <div class="flex items-center gap-2">
+            <Input
+              id="rt-notify_lead_minutes"
+              v-model="form.notify_lead_minutes"
+              type="number"
+              min="1"
+              max="1440"
+              class="h-9"
+            />
+            <span class="text-xs text-muted-foreground shrink-0">min</span>
+          </div>
+          <span class="text-xs text-muted-foreground">{{ t('settings.runtime.notifyLeadMinutesHelp') }}</span>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <Label for="rt-notify_channels" class="text-xs font-medium">
+            {{ t('settings.runtime.notifyChannels') }}
+          </Label>
+          <Select v-model="form.notify_channels">
+            <SelectTrigger class="h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="browser">{{ t('settings.runtime.notifyChannelBrowser') }}</SelectItem>
+              <SelectItem value="ntfy">{{ t('settings.runtime.notifyChannelNtfy') }}</SelectItem>
+              <SelectItem value="both">{{ t('settings.runtime.notifyChannelBoth') }}</SelectItem>
+            </SelectContent>
+          </Select>
+          <span class="text-xs text-muted-foreground">{{ t('settings.runtime.notifyChannelsHelp') }}</span>
+        </div>
+
+        <div class="flex flex-col gap-1.5 md:col-span-2">
+          <Label class="text-xs font-medium">
+            {{ t('settings.runtime.notifyDefaultEnabled') }}
+          </Label>
+          <div class="flex items-center gap-3">
+            <Switch v-model="notifyDefaultEnabledBool" />
+            <span class="text-xs text-muted-foreground">
+              {{ t('settings.runtime.notifyDefaultEnabledHelp') }}
+            </span>
+          </div>
         </div>
       </div>
     </section>

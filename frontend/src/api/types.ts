@@ -15,6 +15,10 @@ export interface Rule {
   driver_name: string
   driver_ref: string
   comment_tag: string
+  notify_enabled: boolean
+  notify_lead_seconds: number
+  notify_sent_browser_at?: string
+  notify_sent_ntfy_at?: string
 }
 
 export interface PresetPort {
@@ -108,4 +112,5 @@ export interface CreateRulePayload {
   duration_sec?: number
   expire_at?: string
   note?: string
+  notify_enabled?: boolean
 }

@@ -26,6 +26,11 @@ export interface RuntimeSettings {
   // Token is redacted to a masked form for display; the real value is
   // write-only.
   ntfy_token: string
+
+  // Expiry notification.
+  notify_lead_minutes: number
+  notify_channels: 'browser' | 'ntfy' | 'both'
+  notify_default_enabled: boolean
 }
 
 export interface RuntimeSystemInfo {

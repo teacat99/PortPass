@@ -58,6 +58,19 @@ const (
 	KeyNtfyURL   Key = "ntfy_url"
 	KeyNtfyTopic Key = "ntfy_topic"
 	KeyNtfyToken Key = "ntfy_token"
+
+	// Expiry-notification settings (apply globally; per-rule opt-in is
+	// stored on Rule itself).
+	KeyNotifyLeadMinutes    Key = "notify_lead_minutes"
+	KeyNotifyChannels       Key = "notify_channels"
+	KeyNotifyDefaultEnabled Key = "notify_default_enabled"
+)
+
+// NotifyChannel enumeration for KeyNotifyChannels.
+const (
+	NotifyChannelBrowser = "browser"
+	NotifyChannelNtfy    = "ntfy"
+	NotifyChannelBoth    = "both"
 )
 
 // AllKeys lists every key the API will accept on writes. The slice is
@@ -82,6 +95,10 @@ var AllKeys = []Key{
 	KeyNtfyURL,
 	KeyNtfyTopic,
 	KeyNtfyToken,
+
+	KeyNotifyLeadMinutes,
+	KeyNotifyChannels,
+	KeyNotifyDefaultEnabled,
 }
 
 // Settings is the live, mutable runtime configuration. Read paths take
@@ -114,6 +131,11 @@ type Settings struct {
 	ntfyTopic string
 	ntfyToken string
 
+	// Expiry-notification settings.
+	notifyLeadMinutes    int
+	notifyChannels       string
+	notifyDefaultEnabled bool
+
 	// Hooks invoked AFTER a successful Set; one per key. Optional.
 	hooks map[Key][]func()
 }
@@ -138,6 +160,10 @@ func New(cfg *config.Config) *Settings {
 
 		loginFailSubnetBits: 0,
 		captchaThreshold:    3, // out of the box: show math after 3 failures
+
+		notifyLeadMinutes:    5, // 5-minute heads-up by default
+		notifyChannels:       NotifyChannelBrowser,
+		notifyDefaultEnabled: false,
 	}
 	return s
 }
@@ -189,6 +215,15 @@ func (s *Settings) LoadFromKV(get func(key string) (value string, present bool, 
 // Returns an error when validation fails; the in-memory state is left
 // untouched in that case.
 func (s *Settings) Set(key Key, value string, save func(k, v string) error) error {
+	if !isKnownKey(key) {
+		return fmt.Errorf("unknown key %q", key)
+	}
+	if _, err := validateOnly(key, value); err != nil {
+		return err
+	}
+	if err := s.crossValidate(map[Key]string{key: value}); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if err := s.applyLocked(key, value); err != nil {
 		s.mu.Unlock()
@@ -227,6 +262,9 @@ func (s *Settings) SetMany(values map[Key]string, save func(k, v string) error) 
 			return fmt.Errorf("%s: %w", k, err)
 		}
 	}
+	if err := s.crossValidate(values); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	for k, v := range values {
 		if err := s.applyLocked(k, v); err != nil {
@@ -250,6 +288,36 @@ func (s *Settings) SetMany(values map[Key]string, save func(k, v string) error) 
 	for _, fns := range hookSet {
 		for _, fn := range fns {
 			fn()
+		}
+	}
+	return nil
+}
+
+// crossValidate runs invariants that span more than one field. We merge
+// the pending values onto the current snapshot first so the operator
+// can flip a dependent field together with its dependency in one PUT
+// (e.g. set ntfy_url AND switch notify_channels=ntfy in the same
+// payload). Only fields that actually appear in `values` are taken
+// from `values`; everything else is read from the current state.
+func (s *Settings) crossValidate(values map[Key]string) error {
+	s.mu.RLock()
+	finalCh := s.notifyChannels
+	finalURL := s.ntfyURL
+	finalTopic := s.ntfyTopic
+	s.mu.RUnlock()
+
+	if v, ok := values[KeyNotifyChannels]; ok {
+		finalCh = strings.TrimSpace(strings.ToLower(v))
+	}
+	if v, ok := values[KeyNtfyURL]; ok {
+		finalURL = strings.TrimSpace(v)
+	}
+	if v, ok := values[KeyNtfyTopic]; ok {
+		finalTopic = strings.TrimSpace(v)
+	}
+	if finalCh == NotifyChannelNtfy || finalCh == NotifyChannelBoth {
+		if finalURL == "" || finalTopic == "" {
+			return errors.New("notify_channels_ntfy_requires_config")
 		}
 	}
 	return nil
@@ -297,6 +365,13 @@ func (s *Settings) applyLocked(key Key, raw string) error {
 		s.ntfyTopic = parsed.(string)
 	case KeyNtfyToken:
 		s.ntfyToken = parsed.(string)
+
+	case KeyNotifyLeadMinutes:
+		s.notifyLeadMinutes = parsed.(int)
+	case KeyNotifyChannels:
+		s.notifyChannels = parsed.(string)
+	case KeyNotifyDefaultEnabled:
+		s.notifyDefaultEnabled = parsed.(bool)
 	default:
 		return fmt.Errorf("unknown key %q", key)
 	}
@@ -361,8 +436,35 @@ func validateOnly(key Key, raw string) (any, error) {
 			return "", errors.New("ntfy_token too long")
 		}
 		return v, nil
+
+	case KeyNotifyLeadMinutes:
+		// 1 minute is the floor (anything shorter is racy with the
+		// 30-second reconcile cycle); 24 hours is the ceiling so a
+		// typo cannot effectively disable expiry notifications.
+		return parseRange(raw, 1, 24*60)
+	case KeyNotifyChannels:
+		v := strings.TrimSpace(strings.ToLower(raw))
+		switch v {
+		case NotifyChannelBrowser, NotifyChannelNtfy, NotifyChannelBoth:
+			return v, nil
+		}
+		return "", fmt.Errorf("notify_channels must be one of %s/%s/%s",
+			NotifyChannelBrowser, NotifyChannelNtfy, NotifyChannelBoth)
+	case KeyNotifyDefaultEnabled:
+		return parseBool(raw)
 	}
 	return nil, fmt.Errorf("unknown key %q", key)
+}
+
+func parseBool(raw string) (bool, error) {
+	v := strings.TrimSpace(strings.ToLower(raw))
+	switch v {
+	case "true", "1", "yes", "on":
+		return true, nil
+	case "false", "0", "no", "off", "":
+		return false, nil
+	}
+	return false, fmt.Errorf("not a boolean: %q", raw)
 }
 
 func isKnownKey(k Key) bool {
@@ -475,6 +577,30 @@ func (s *Settings) NtfyToken() string {
 	return s.ntfyToken
 }
 
+func (s *Settings) NotifyLeadMinutes() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.notifyLeadMinutes
+}
+func (s *Settings) NotifyChannels() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.notifyChannels
+}
+func (s *Settings) NotifyDefaultEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.notifyDefaultEnabled
+}
+
+// NotifyChannelIncludes reports whether the configured channel selector
+// covers a particular delivery method (browser / ntfy). It exists so
+// callers don't have to encode the "both" semantic at every call site.
+func (s *Settings) NotifyChannelIncludes(want string) bool {
+	c := s.NotifyChannels()
+	return c == want || c == NotifyChannelBoth
+}
+
 // Snapshot returns a JSON-friendly view of every hot field plus the
 // rendered "current" value. Used by GET /api/runtime-settings so the
 // UI can render a single coherent state.
@@ -503,6 +629,10 @@ func (s *Settings) Snapshot() map[string]any {
 		// ntfy_token is intentionally redacted from snapshots so it is
 		// never echoed back to the client; the UI only writes it.
 		string(KeyNtfyToken): maskToken(s.ntfyToken),
+
+		string(KeyNotifyLeadMinutes):    s.notifyLeadMinutes,
+		string(KeyNotifyChannels):       s.notifyChannels,
+		string(KeyNotifyDefaultEnabled): s.notifyDefaultEnabled,
 	}
 }
 

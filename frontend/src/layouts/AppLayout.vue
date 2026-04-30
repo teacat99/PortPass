@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -20,6 +20,7 @@ import LanguageIcon from '@/components/LanguageIcon.vue'
 import { setLocale } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import { useNotifyStore } from '@/stores/notify'
 import { changeOwnPassword } from '@/api/auth'
 import { Message } from '@/lib/toast'
 import logoUrl from '@/assets/logo.svg'
@@ -51,6 +52,7 @@ const router = useRouter()
 const { t, locale } = useI18n()
 const auth = useAuthStore()
 const theme = useThemeStore()
+const notifyStore = useNotifyStore()
 
 const pwdModal = ref(false)
 const pwdSubmitting = ref(false)
@@ -64,6 +66,30 @@ onMounted(async () => {
   if (auth.token || !auth.required) {
     await auth.fetchMe()
   }
+  if (auth.me) {
+    await notifyStore.loadSettings()
+    notifyStore.startPolling()
+  }
+})
+
+// React to login / logout while the layout stays mounted (router-link
+// based logout doesn't unmount AppLayout). When the user is gone we
+// stop the timer to avoid noisy 401s; when a fresh login lands we
+// (re)load settings and resume the loop.
+watch(
+  () => !!auth.me,
+  async (loggedIn) => {
+    if (loggedIn) {
+      await notifyStore.loadSettings()
+      notifyStore.startPolling()
+    } else {
+      notifyStore.stopPolling()
+    }
+  }
+)
+
+onBeforeUnmount(() => {
+  notifyStore.stopPolling()
 })
 
 const currentKey = computed(() => String(route.name ?? 'home'))

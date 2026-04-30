@@ -50,6 +50,42 @@ func (n *Ntfy) Notify(title, body, tag string) {
 	go n.send(url, token, title, body, tag)
 }
 
+// NotifyExpiry is the synchronous variant used by the expiry watcher.
+// We need to know whether delivery succeeded so the caller can decide
+// to stamp NotifySentAt on the rule. Returns nil when ntfy is not
+// configured (a no-op rather than an error so the watcher can quietly
+// skip when the operator picked the browser-only channel).
+func (n *Ntfy) NotifyExpiry(title, body, tag string) error {
+	url := n.urlForPost()
+	if url == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBufferString(body))
+	if err != nil {
+		return err
+	}
+	if title != "" {
+		req.Header.Set("Title", title)
+	}
+	if tag != "" {
+		req.Header.Set("Tags", tag)
+	}
+	if token := n.rt.NtfyToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return errFromStatus(resp.Status)
+	}
+	return nil
+}
+
 // urlForPost composes the destination URL: NtfyURL must be the server
 // root (e.g. "https://ntfy.sh") and NtfyTopic the topic name. We tolerate
 // an URL that already contains the topic by detecting a non-empty path.

@@ -4,6 +4,27 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-04-30
+
+### 新增
+
+- **规则到期前推送提醒**：创建规则时可点亮「铃铛」开关，到期前 N 分钟（默认 5 分钟）自动通过浏览器 / ntfy 推送提醒；点亮时立即向浏览器申请 Notification 权限并在被拒时给出明确提示
+- **续期 = 重启提醒周期**：调用「延长」时清空 `notify_sent_browser_at` / `notify_sent_ntfy_at`，新一轮到期窗口仍会再次推送，避免长期续期的规则只通知一次
+- **设置页新增「到期提醒」三项**：`提前提醒时间`（1–1440 分钟，默认 5）、`推送方式`（仅浏览器 / 仅 ntfy / 浏览器 + ntfy，默认仅浏览器）、`新规则默认开启提醒`（默认关闭）
+- **跨字段校验**：当推送方式选了 `ntfy` / `浏览器 + ntfy` 但 ntfy 服务地址或主题尚未填写时拒绝保存，避免静默失败（错误码 `notify_channels_ntfy_requires_config`）
+- **每条规则独立铃铛 icon**：规则列表桌面表 + 移动卡片在 Port/Protocol 旁显示铃铛图标，hover 时 tooltip 给出"到期前 X 分钟提醒"或"已在 HH:MM:SS 推送过临期提醒"等状态
+- **临期通知后端 watcher**：与生命周期对账解耦的独立 30s 轮询专门处理 ntfy 推送，浏览器侧由前端轮询 `/api/notify/pending` 自行触发本地 `Notification`；`browser` / `ntfy` / `both` 互不影响
+- **新增 API**：`GET /api/notify/settings`（公开给所有登录用户）、`GET /api/notify/pending`、`POST /api/notify/ack`
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.2.0
+docker pull ghcr.io/teacat99/portpass:1.2.0
+```
+
+数据库会自动迁移：`rules` 表增加 `notify_enabled` / `notify_lead_seconds` / `notify_sent_browser_at` / `notify_sent_ntfy_at` 四列；`settings` KV 增加 `notify_lead_minutes` / `notify_channels` / `notify_default_enabled` 三个键。无需手动干预，已存在规则的铃铛默认关闭。
+
 ## [1.1.3] - 2026-04-30
 
 ### 修复
@@ -132,6 +153,7 @@ docker pull ghcr.io/teacat99/portpass:1.0.0
 
 数据库由 GORM 自动迁移，无需手动操作。
 
+[1.2.0]: https://github.com/teacat99/PortPass/releases/tag/v1.2.0
 [1.1.3]: https://github.com/teacat99/PortPass/releases/tag/v1.1.3
 [1.1.2]: https://github.com/teacat99/PortPass/releases/tag/v1.1.2
 [1.1.1]: https://github.com/teacat99/PortPass/releases/tag/v1.1.1

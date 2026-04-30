@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import {
-  RefreshCw, Plus, XCircle, Clock, Copy, Search as SearchIcon
+  RefreshCw, Plus, XCircle, Clock, Copy, Search as SearchIcon,
+  Bell, BellOff
 } from 'lucide-vue-next'
 import { duplicateRule, extendRule, terminateRule } from '@/api/rules'
 import { useRulesStore } from '@/stores/rules'
@@ -92,6 +93,20 @@ async function onDuplicate(rule: Rule) {
 
 function protoVariant(p: string) {
   return p === 'udp' ? 'secondary' : 'default'
+}
+
+// notifyTooltip composes the tooltip text for the per-row bell icon.
+// We prefer "already notified at <time>" when one of the channels has
+// fired so the operator can correlate a recent toast/ntfy push back to
+// the rule; otherwise we surface the lead time so they know when the
+// next ping will go out.
+function notifyTooltip(r: Rule): string {
+  const sentAt = r.notify_sent_browser_at || r.notify_sent_ntfy_at
+  if (sentAt) {
+    return t('rules.notifyAlreadySent', { time: dayjs(sentAt).format('HH:mm:ss') })
+  }
+  const leadMin = Math.max(1, Math.round((r.notify_lead_seconds || 0) / 60))
+  return t('rules.notifyOn', { n: leadMin })
 }
 </script>
 
@@ -187,6 +202,21 @@ function protoVariant(p: string) {
                   <Badge :variant="protoVariant(r.protocol)" class="text-[10px] px-1.5 py-0">
                     {{ r.protocol.toUpperCase() }}
                   </Badge>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <span
+                        class="inline-flex items-center"
+                        :class="r.notify_enabled ? 'text-primary' : 'text-muted-foreground/50'"
+                        :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
+                      >
+                        <Bell v-if="r.notify_enabled" class="size-3.5" />
+                        <BellOff v-else class="size-3.5" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </TableCell>
               <TableCell>
@@ -271,6 +301,21 @@ function protoVariant(p: string) {
               <Badge :variant="protoVariant(r.protocol)" class="text-[10px]">
                 {{ r.protocol.toUpperCase() }}
               </Badge>
+              <Tooltip>
+                <TooltipTrigger as-child>
+                  <span
+                    class="inline-flex items-center"
+                    :class="r.notify_enabled ? 'text-primary' : 'text-muted-foreground/50'"
+                    :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
+                  >
+                    <Bell v-if="r.notify_enabled" class="size-3.5" />
+                    <BellOff v-else class="size-3.5" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}
+                </TooltipContent>
+              </Tooltip>
             </div>
             <CountdownChip :expire-at="r.expire_at" :created-at="r.created_at" size="small" />
           </div>

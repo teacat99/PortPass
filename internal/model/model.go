@@ -49,6 +49,20 @@ type Rule struct {
 	DriverName   string     `gorm:"size:16" json:"driver_name"`
 	DriverRef    string     `gorm:"size:128" json:"driver_ref"`
 	CommentTag   string     `gorm:"uniqueIndex;size:64" json:"comment_tag"`
+
+	// Expiry-notification fields. The lead time is snapshotted at rule
+	// creation time so a later change to the global default does not
+	// retroactively affect existing rules. The Sent* timestamps are
+	// kept per-channel rather than as a single column because the
+	// global "both" channel selector wants browser + ntfy to be
+	// independent: a successful ntfy push must not silence the browser
+	// pop-up scheduled for the same rule and vice versa. Both are
+	// cleared on Extend so the next imminent expiry triggers another
+	// round of notifications.
+	NotifyEnabled         bool       `gorm:"default:false" json:"notify_enabled"`
+	NotifyLeadSeconds     int        `gorm:"default:0" json:"notify_lead_seconds"`
+	NotifySentBrowserAt   *time.Time `json:"notify_sent_browser_at,omitempty"`
+	NotifySentNtfyAt      *time.Time `json:"notify_sent_ntfy_at,omitempty"`
 }
 
 // PresetPort is a reusable port entry. Beyond being the UI quick-button it

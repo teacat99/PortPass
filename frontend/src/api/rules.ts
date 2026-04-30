@@ -88,3 +88,40 @@ export async function getSettings() {
 export async function saveSettings(kv: Record<string, string>) {
   await client.put('/settings', kv)
 }
+
+// fetchPendingNotifications returns the caller's own rules that are
+// inside their pre-expiry notification window and not yet acked. The
+// browser polls this every ~30s and pops a Notification per entry.
+// The backend already filters by channel selector (returns empty when
+// the operator picked ntfy-only).
+export async function fetchPendingNotifications() {
+  const { data } = await client.get<{ rules: Rule[] }>('/notify/pending')
+  return data.rules
+}
+
+export interface NotifySettings {
+  lead_minutes: number
+  channels: 'browser' | 'ntfy' | 'both'
+  default_enabled: boolean
+}
+
+// fetchNotifySettings exposes the three notify knobs every authenticated
+// user can read. The full /runtime-settings is admin-only; this slice
+// is what HomeView / RulesView / the polling loop need to render their
+// UI and decide whether to call requestPermission().
+export async function fetchNotifySettings() {
+  const { data } = await client.get<NotifySettings>('/notify/settings')
+  return data
+}
+
+// ackNotifications stamps notify_sent_browser_at on the listed rule
+// IDs so the watcher won't return them again until Extend resets the
+// flag. Errors are non-fatal: a missed ack just means the same rule
+// may pop one more time on the next poll.
+export async function ackNotifications(ruleIds: number[]) {
+  if (ruleIds.length === 0) return 0
+  const { data } = await client.post<{ updated: number }>('/notify/ack', {
+    rule_ids: ruleIds
+  })
+  return data.updated
+}
