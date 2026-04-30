@@ -129,10 +129,10 @@ function notifyTooltip(r: Rule): string {
           <Input
             v-model="search"
             :placeholder="t('rules.searchPlaceholder')"
-            class="pl-8 h-9"
+            class="pl-8 h-9 bg-card"
           />
         </div>
-        <Button variant="outline" size="sm" :disabled="store.loading" @click="store.reload()">
+        <Button variant="outline" size="sm" class="bg-card" :disabled="store.loading" @click="store.reload()">
           <RefreshCw :class="['size-4', store.loading && 'animate-spin']" />
           <span class="hidden sm:inline">{{ t('action.refresh') }}</span>
         </Button>
@@ -187,7 +187,7 @@ function notifyTooltip(r: Rule): string {
               <TableHead class="w-[130px]">{{ t('rules.createdAt') }}</TableHead>
               <TableHead class="w-[100px]">{{ t('rules.user') }}</TableHead>
               <TableHead>{{ t('rules.note') }}</TableHead>
-              <TableHead class="w-[120px] text-right">{{ t('rules.actions') }}</TableHead>
+              <TableHead class="w-[160px] text-right">{{ t('rules.actions') }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -202,21 +202,6 @@ function notifyTooltip(r: Rule): string {
                   <Badge :variant="protoVariant(r.protocol)" class="text-[10px] px-1.5 py-0">
                     {{ r.protocol.toUpperCase() }}
                   </Badge>
-                  <Tooltip>
-                    <TooltipTrigger as-child>
-                      <span
-                        class="inline-flex items-center"
-                        :class="r.notify_enabled ? 'text-primary' : 'text-muted-foreground/50'"
-                        :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
-                      >
-                        <Bell v-if="r.notify_enabled" class="size-3.5" />
-                        <BellOff v-else class="size-3.5" />
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}
-                    </TooltipContent>
-                  </Tooltip>
                 </div>
               </TableCell>
               <TableCell>
@@ -251,7 +236,29 @@ function notifyTooltip(r: Rule): string {
                 <span v-else class="text-muted-foreground text-sm">—</span>
               </TableCell>
               <TableCell class="text-right whitespace-nowrap">
-                <div class="inline-flex gap-0.5">
+                <div class="inline-flex gap-0.5 items-center">
+                  <!--
+                    Notification status indicator. Non-interactive (the
+                    bell can only be flipped at create time on HomeView)
+                    but rendered with the same size-8 footprint as the
+                    real action buttons so the icon row stays vertically
+                    aligned.
+                  -->
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <span
+                        class="inline-flex size-8 items-center justify-center rounded-md"
+                        :class="r.notify_enabled ? 'text-primary' : 'text-muted-foreground/40'"
+                        :aria-label="r.notify_enabled ? 'notify-on' : 'notify-off'"
+                      >
+                        <Bell v-if="r.notify_enabled" class="size-4" />
+                        <BellOff v-else class="size-4" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {{ r.notify_enabled ? notifyTooltip(r) : t('rules.notifyOff') }}
+                    </TooltipContent>
+                  </Tooltip>
                   <Tooltip>
                     <TooltipTrigger as-child>
                       <Button variant="ghost" size="icon" class="size-8" @click="openExtend(r)">

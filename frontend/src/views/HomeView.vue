@@ -22,6 +22,9 @@ import PortSetInput from '@/components/PortSetInput.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Tooltip, TooltipTrigger, TooltipContent
+} from '@/components/ui/tooltip'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -56,6 +59,7 @@ const form = ref({
 const portsValidation = ref<{ ok: boolean, error: string | null }>({ ok: false, error: null })
 
 const rawDurationOptions = [
+  { label: '30s', value: 30 },
   { label: '15m', value: 15 * 60 },
   { label: '1h',  value: 60 * 60 },
   { label: '4h',  value: 4 * 60 * 60 },
@@ -367,14 +371,70 @@ const sourceOptions = computed<SourceOpt[]>(() => [
 
     <!-- Form card -->
     <section class="rounded-lg bg-card shadow-card flex flex-col gap-5 p-5 md:p-7">
-      <header class="pb-3 border-b border-border">
-        <h2 class="text-base md:text-lg font-semibold text-foreground mb-1">
-          {{ t('home.createTitle') }}
-        </h2>
-        <p class="text-xs md:text-sm text-muted-foreground m-0">
-          {{ t('home.createSub') }}
-        </p>
+      <header class="flex items-start justify-between gap-3 pb-3 border-b border-border">
+        <div class="min-w-0 flex-1">
+          <h2 class="text-base md:text-lg font-semibold text-foreground mb-1">
+            {{ t('home.createTitle') }}
+          </h2>
+          <p class="text-xs md:text-sm text-muted-foreground m-0">
+            {{ t('home.createSub') }}
+          </p>
+        </div>
+        <!--
+          Bell toggle in the card top-right. Replaces the previous
+          full-width "to-expire reminder" block below the note. Visual
+          treatment mirrors the per-rule action buttons (icon-only square),
+          but here it's interactive: clicking flips notifyEnabled and
+          (when turning on for browser/both channels) requests permission.
+        -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <button
+              type="button"
+              class="flex items-center justify-center size-9 md:size-10 rounded-md border transition-all shrink-0"
+              :class="form.notifyEnabled
+                ? 'border-primary/50 bg-primary/10 text-primary hover:bg-primary/15'
+                : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50 hover:bg-primary/5'"
+              :aria-label="form.notifyEnabled
+                ? t('home.notifyOn', { n: notifyLeadMinutes })
+                : t('home.notifyOff')"
+              @click="onToggleNotify"
+            >
+              <Bell v-if="form.notifyEnabled" class="size-[18px]" />
+              <BellOff v-else class="size-[18px]" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent class="max-w-xs">
+            <div class="font-medium">
+              {{ form.notifyEnabled
+                ? t('home.notifyOn', { n: notifyLeadMinutes })
+                : t('home.notifyOff') }}
+            </div>
+            <div class="text-[11px] mt-0.5 opacity-90">
+              {{ form.notifyEnabled
+                ? t('home.notifyChannelHint', { channels: notifyChannelsLabel })
+                : t('home.notifyOnHint', { n: notifyLeadMinutes }) }}
+            </div>
+          </TooltipContent>
+        </Tooltip>
       </header>
+
+      <!--
+        Permission/availability hint. Only renders when ensureNotifyPermission
+        produced a warning (denied / unsupported / insecure context). Sits
+        right under the header so it surfaces near the bell that triggered
+        it without displacing the form below.
+      -->
+      <div
+        v-if="notifyHint"
+        class="flex items-center gap-2 text-xs rounded-md px-3 py-2 -mt-2"
+        :class="notifyHint.kind === 'warn'
+          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+          : 'bg-muted/50 text-muted-foreground'"
+      >
+        <Bell class="size-3.5 shrink-0" />
+        <span>{{ notifyHint.text }}</span>
+      </div>
 
       <!-- Step ① Source -->
       <div class="flex flex-col gap-3">
@@ -533,51 +593,6 @@ const sourceOptions = computed<SourceOpt[]>(() => [
           :placeholder="t('home.notePlaceholder')"
           class="min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
         />
-      </div>
-
-      <!-- Notify toggle -->
-      <div class="flex flex-col gap-2">
-        <h3 class="pp-section-title">{{ t('home.notifyTitle') }}</h3>
-        <button
-          type="button"
-          class="flex items-center gap-3 rounded-md border px-4 py-3 text-left transition-all"
-          :class="form.notifyEnabled
-            ? 'border-primary bg-primary/10 text-foreground'
-            : 'border-border bg-muted/40 text-muted-foreground hover:border-primary/50 hover:bg-primary/5'"
-          @click="onToggleNotify"
-        >
-          <span
-            class="flex size-9 items-center justify-center rounded-full shrink-0"
-            :class="form.notifyEnabled
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-muted text-muted-foreground'"
-          >
-            <Bell v-if="form.notifyEnabled" class="size-4" />
-            <BellOff v-else class="size-4" />
-          </span>
-          <span class="flex flex-col gap-0.5 min-w-0">
-            <span class="text-sm font-medium">
-              {{ form.notifyEnabled
-                ? t('home.notifyOn', { n: notifyLeadMinutes })
-                : t('home.notifyOff') }}
-            </span>
-            <span class="text-[11px] text-muted-foreground/90 truncate">
-              {{ form.notifyEnabled
-                ? t('home.notifyChannelHint', { channels: notifyChannelsLabel })
-                : t('home.notifyOnHint', { n: notifyLeadMinutes }) }}
-            </span>
-          </span>
-        </button>
-        <div
-          v-if="notifyHint"
-          class="flex items-center gap-2 text-xs rounded-md px-3 py-2"
-          :class="notifyHint.kind === 'warn'
-            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
-            : 'bg-muted/50 text-muted-foreground'"
-        >
-          <Bell class="size-3.5" />
-          <span>{{ notifyHint.text }}</span>
-        </div>
       </div>
 
       <!-- Submit (desktop inline) -->
