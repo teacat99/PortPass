@@ -273,6 +273,12 @@ type createRuleReq struct {
 	// "unspecified by client" (use server default) from "explicitly
 	// false" (opt out even when the default is on).
 	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+	// CleanupOnExpire records whether the lifecycle manager should
+	// drop existing conntrack entries when the firewall rule is
+	// removed (auto expiry, reconcile-driven cleanup). Pointer so
+	// "unset by client" (use runtime default) is distinguishable
+	// from "explicitly false".
+	CleanupOnExpire *bool `json:"cleanup_on_expire,omitempty"`
 }
 
 // handleCreateRule creates, persists and schedules a new firewall rule. It
@@ -343,6 +349,10 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 	if notifyEnabled {
 		notifyLead = s.rt.NotifyLeadMinutes() * 60
 	}
+	cleanupOnExpire := s.rt.CleanupOnExpireDefault()
+	if req.CleanupOnExpire != nil {
+		cleanupOnExpire = *req.CleanupOnExpire
+	}
 	rule := &model.Rule{
 		UserID:            uid,
 		SourceIP:          source,
@@ -357,6 +367,7 @@ func (s *Server) handleCreateRule(c *gin.Context) {
 		CreatedAt:         time.Now(),
 		NotifyEnabled:     notifyEnabled,
 		NotifyLeadSeconds: notifyLead,
+		CleanupOnExpire:   cleanupOnExpire,
 	}
 	if err := s.store.CreateRule(rule); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -441,11 +452,29 @@ func (s *Server) handleGetRule(c *gin.Context) {
 	c.JSON(http.StatusOK, r)
 }
 
+// terminateReq captures the optional cleanup toggle the UI surfaces in
+// the "Terminate" confirmation dialog. The body is optional: a missing
+// or empty body keeps cleanup off (safe default).
+type terminateReq struct {
+	Cleanup bool `json:"cleanup"`
+}
+
 func (s *Server) handleTerminateRule(c *gin.Context) {
 	id, err := parseID(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	// Body is optional - the legacy clients send no body at all and
+	// must keep working. ShouldBindJSON returns EOF on empty body which
+	// we treat as cleanup=false; any actual JSON parse error stays
+	// fatal so a malformed payload doesn't silently flip behaviour.
+	var req terminateReq
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	r, err := s.store.GetRule(id)
 	if err != nil || r == nil {
@@ -455,12 +484,16 @@ func (s *Server) handleTerminateRule(c *gin.Context) {
 	if !s.ensureRuleVisible(c, r) {
 		return
 	}
-	if err := s.lifecycle.Revoke(r); err != nil {
+	if err := s.lifecycle.Revoke(r, req.Cleanup); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	detail := ""
+	if req.Cleanup {
+		detail = fmt.Sprintf("cleanup=true flushed=%d", r.LastCleanupCount)
+	}
 	_ = s.store.WriteAudit(&model.AuditLog{
-		Action: "terminate", RuleID: r.ID, ActorIP: s.clientIP(c),
+		Action: "terminate", RuleID: r.ID, ActorIP: s.clientIP(c), Detail: detail,
 	})
 	c.JSON(http.StatusOK, r)
 }
@@ -563,6 +596,7 @@ func (s *Server) handleDuplicateRule(c *gin.Context) {
 		CreatedIP: clientIP, CreatedAt: time.Now(),
 		NotifyEnabled:     src.NotifyEnabled,
 		NotifyLeadSeconds: dupNotifyLead,
+		CleanupOnExpire:   src.CleanupOnExpire,
 	}
 	if err := s.store.CreateRule(dup); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -1036,16 +1070,20 @@ func (s *Server) handleNotifyAck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"updated": n})
 }
 
-// handleNotifySettings returns just the three "expiry notification"
-// settings every authenticated user needs to render the bell toggle
-// and run the browser-side polling loop. The full runtime-settings
-// endpoint is admin-only on purpose; this carve-out keeps the
-// "viewable by users" surface minimal.
+// handleNotifySettings returns the small slice of runtime-settings
+// every authenticated user is allowed to read so HomeView and
+// RulesView can render their per-rule controls. Originally scoped to
+// expiry-notification (lead_minutes, channels, default_enabled), it
+// has since picked up cleanup_on_expire_default because the create
+// form needs that default too. The full /runtime-settings endpoint
+// stays admin-only; this carve-out is kept minimal and the keys are
+// stable across releases.
 func (s *Server) handleNotifySettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"lead_minutes":    s.rt.NotifyLeadMinutes(),
-		"channels":        s.rt.NotifyChannels(),
-		"default_enabled": s.rt.NotifyDefaultEnabled(),
+		"lead_minutes":              s.rt.NotifyLeadMinutes(),
+		"channels":                  s.rt.NotifyChannels(),
+		"default_enabled":           s.rt.NotifyDefaultEnabled(),
+		"cleanup_on_expire_default": s.rt.CleanupOnExpireDefault(),
 	})
 }
 

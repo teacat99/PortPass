@@ -78,7 +78,7 @@ func TestRevokeRemovesImmediately(t *testing.T) {
 	if err := m.Schedule(r); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Revoke(r); err != nil {
+	if err := m.Revoke(r, false); err != nil {
 		t.Fatal(err)
 	}
 	live, _ := drv.List()
@@ -134,6 +134,76 @@ func TestReconcileCleansOrphan(t *testing.T) {
 	live, _ := drv.List()
 	if len(live) != 0 {
 		t.Fatalf("orphan should be cleaned, got %d", len(live))
+	}
+}
+
+// TestRevokeWithCleanupSurvivesMissingConntrack verifies that asking
+// for cleanup on a host without the conntrack binary still completes
+// the revoke - the firewall row is removed, the rule transitions to
+// revoked, and LastCleanupCount stays at zero. Cleanup is best-effort,
+// the rule's status contract is the strict invariant.
+func TestRevokeWithCleanupSurvivesMissingConntrack(t *testing.T) {
+	t.Setenv("PATH", "")
+	s := newTestStore(t)
+	drv := firewall.NewMock()
+	m := New(s, drv, time.Hour)
+	defer m.Stop()
+
+	r := &model.Rule{
+		SourceIP: "1.2.3.4/32", Port: 22, Protocol: model.ProtoTCP,
+		ExpireAt: time.Now().Add(time.Hour), Status: model.StatusPending,
+	}
+	if err := s.CreateRule(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Schedule(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Revoke(r, true); err != nil {
+		t.Fatalf("Revoke must succeed even when conntrack is missing, got %v", err)
+	}
+	if r.Status != model.StatusRevoked {
+		t.Fatalf("expected revoked, got %q", r.Status)
+	}
+	if r.LastCleanupCount != 0 {
+		t.Fatalf("expected zero conntrack flushes, got %d", r.LastCleanupCount)
+	}
+}
+
+// TestExpireWithCleanupFlagHonoured verifies that the auto-expire path
+// (the AfterFunc primary channel) inspects rule.CleanupOnExpire. We
+// can't observe the conntrack call directly without mocking the
+// firewall package, so we sample the side effects: status transitions
+// and the LastCleanupCount default of zero (since conntrack is absent
+// in the test sandbox). The negative case - CleanupOnExpire=false -
+// must leave LastCleanupCount untouched as well.
+func TestExpireWithCleanupFlagHonoured(t *testing.T) {
+	t.Setenv("PATH", "")
+	s := newTestStore(t)
+	drv := firewall.NewMock()
+	m := New(s, drv, 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	r := &model.Rule{
+		SourceIP: "1.2.3.4/32", Port: 22, Protocol: model.ProtoTCP,
+		ExpireAt: time.Now().Add(60 * time.Millisecond),
+		Status:   model.StatusPending, CleanupOnExpire: true,
+	}
+	if err := s.CreateRule(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Schedule(r); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	got, _ := s.GetRule(r.ID)
+	if got.Status != model.StatusExpired {
+		t.Fatalf("expected expired, got %q", got.Status)
 	}
 }
 

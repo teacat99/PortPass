@@ -41,6 +41,7 @@ RUN apk add --no-cache \
       iptables-legacy \
       ip6tables \
       nftables \
+      conntrack-tools \
  && adduser -D -u 10001 portpass \
  && mkdir -p /data \
  && chown portpass:portpass /data

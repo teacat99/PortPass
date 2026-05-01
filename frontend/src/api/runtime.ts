@@ -31,6 +31,12 @@ export interface RuntimeSettings {
   notify_lead_minutes: number
   notify_channels: 'browser' | 'ntfy' | 'both'
   notify_default_enabled: boolean
+
+  // Cleanup-on-expire global default. The form pre-fills the per-rule
+  // checkbox with this value; admins flip it once and forget. Stored
+  // as a boolean wire-side; the backend's runtime KV holds the string
+  // form ("true"/"false").
+  cleanup_on_expire_default: boolean
 }
 
 export interface RuntimeSystemInfo {

@@ -22,8 +22,15 @@ export async function createRule(payload: CreateRulePayload) {
   return data
 }
 
-export async function terminateRule(id: number) {
-  const { data } = await client.post<Rule>(`/rules/${id}/terminate`)
+// terminateRule revokes an active rule. The optional `cleanup` flag
+// asks the backend to flush conntrack entries matching the rule's
+// (src, dport, proto) tuple after the firewall row is gone, which
+// breaks any TCP/UDP flows the rule was permitting. Default false to
+// keep the legacy single-click flow safe; the UI surfaces the toggle
+// in the confirmation dialog.
+export async function terminateRule(id: number, cleanup = false) {
+  const body = cleanup ? { cleanup: true } : undefined
+  const { data } = await client.post<Rule>(`/rules/${id}/terminate`, body)
   return data
 }
 
@@ -111,6 +118,12 @@ export interface NotifySettings {
   lead_minutes: number
   channels: 'browser' | 'ntfy' | 'both'
   default_enabled: boolean
+  // cleanup_on_expire_default seeds the per-rule "drop existing flows
+  // on expiry" checkbox in the create form. Lives on this endpoint
+  // (rather than admin-only /runtime-settings) so non-admin users get
+  // a consistent default. Keep the key stable - older clients tolerate
+  // its absence by treating undefined as false.
+  cleanup_on_expire_default: boolean
 }
 
 // fetchNotifySettings exposes the three notify knobs every authenticated

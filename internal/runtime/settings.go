@@ -64,6 +64,12 @@ const (
 	KeyNotifyLeadMinutes    Key = "notify_lead_minutes"
 	KeyNotifyChannels       Key = "notify_channels"
 	KeyNotifyDefaultEnabled Key = "notify_default_enabled"
+
+	// Cleanup-on-expire global default. When a rule is created without
+	// explicit input from the client, this flag is copied onto the
+	// Rule.CleanupOnExpire field. The flag itself is enforced per-rule
+	// so changing this default has no retroactive effect.
+	KeyCleanupOnExpireDefault Key = "cleanup_on_expire_default"
 )
 
 // NotifyChannel enumeration for KeyNotifyChannels.
@@ -99,6 +105,8 @@ var AllKeys = []Key{
 	KeyNotifyLeadMinutes,
 	KeyNotifyChannels,
 	KeyNotifyDefaultEnabled,
+
+	KeyCleanupOnExpireDefault,
 }
 
 // Settings is the live, mutable runtime configuration. Read paths take
@@ -136,6 +144,10 @@ type Settings struct {
 	notifyChannels       string
 	notifyDefaultEnabled bool
 
+	// Cleanup-on-expire seed used at rule creation time only; per-rule
+	// flag on Rule.CleanupOnExpire is what the lifecycle layer reads.
+	cleanupOnExpireDefault bool
+
 	// Hooks invoked AFTER a successful Set; one per key. Optional.
 	hooks map[Key][]func()
 }
@@ -164,6 +176,11 @@ func New(cfg *config.Config) *Settings {
 		notifyLeadMinutes:    5, // 5-minute heads-up by default
 		notifyChannels:       NotifyChannelBrowser,
 		notifyDefaultEnabled: false,
+
+		// Default-off: connection cleanup is a behaviour change, so we
+		// keep upgraders in their existing groove. Operators opt in via
+		// /api/runtime-settings or per-rule.
+		cleanupOnExpireDefault: false,
 	}
 	return s
 }
@@ -372,6 +389,9 @@ func (s *Settings) applyLocked(key Key, raw string) error {
 		s.notifyChannels = parsed.(string)
 	case KeyNotifyDefaultEnabled:
 		s.notifyDefaultEnabled = parsed.(bool)
+
+	case KeyCleanupOnExpireDefault:
+		s.cleanupOnExpireDefault = parsed.(bool)
 	default:
 		return fmt.Errorf("unknown key %q", key)
 	}
@@ -451,6 +471,9 @@ func validateOnly(key Key, raw string) (any, error) {
 		return "", fmt.Errorf("notify_channels must be one of %s/%s/%s",
 			NotifyChannelBrowser, NotifyChannelNtfy, NotifyChannelBoth)
 	case KeyNotifyDefaultEnabled:
+		return parseBool(raw)
+
+	case KeyCleanupOnExpireDefault:
 		return parseBool(raw)
 	}
 	return nil, fmt.Errorf("unknown key %q", key)
@@ -593,6 +616,15 @@ func (s *Settings) NotifyDefaultEnabled() bool {
 	return s.notifyDefaultEnabled
 }
 
+// CleanupOnExpireDefault is the seed value copied onto a Rule's
+// CleanupOnExpire when the create request leaves the field unspecified.
+// Read on every CreateRule, so it is RLock-cheap.
+func (s *Settings) CleanupOnExpireDefault() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cleanupOnExpireDefault
+}
+
 // NotifyChannelIncludes reports whether the configured channel selector
 // covers a particular delivery method (browser / ntfy). It exists so
 // callers don't have to encode the "both" semantic at every call site.
@@ -633,6 +665,8 @@ func (s *Settings) Snapshot() map[string]any {
 		string(KeyNotifyLeadMinutes):    s.notifyLeadMinutes,
 		string(KeyNotifyChannels):       s.notifyChannels,
 		string(KeyNotifyDefaultEnabled): s.notifyDefaultEnabled,
+
+		string(KeyCleanupOnExpireDefault): s.cleanupOnExpireDefault,
 	}
 }
 

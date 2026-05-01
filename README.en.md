@@ -158,6 +158,19 @@ PortPass is **Linux-only** (Windows / macOS / *BSD are not supported because the
 3. **Boot reconcile** runs synchronously before the HTTP server starts
 4. **SIGTERM does NOT flush rules** — a restart is not a revocation
 
+## Deployment requirements for "drop existing connections on expiry"
+
+The "drop existing connections on expiry" feature (`cleanup_on_expire`) calls `conntrack -D` on the host to surgically remove tracking entries that match the rule's `(source IP, destination port, protocol)` tuple. It will **never** affect connections allowed by other firewall rules. However, Linux's connection-tracking semantics mean that **deleting a conntrack entry alone is not enough**: to really tear down an established TCP/UDP flow you also need a fallback path that drops packets when no ACCEPT rule is present. Verify both points in production:
+
+1. **Container side**: use the official PortPass image (≥ `v1.x.y`, ships with `conntrack-tools`), or, if you build your own, `apk add conntrack-tools` on Alpine.
+2. **Host firewall side**: the `INPUT` chain must have a **default-drop or trailing DROP** semantic, e.g.:
+   - CentOS / RHEL + firewalld: the default zone ends with `REJECT --reject-with icmp-host-prohibited`, which satisfies this.
+   - Ubuntu + ufw: enable `ufw default deny incoming`.
+   - Self-managed iptables: either `iptables -P INPUT DROP` or a trailing `iptables -A INPUT -j DROP`.
+   - Cloud VMs that rely on security groups only: after PortPass triggers cleanup, the next packet of an established flow is still allowed back through the cloud security group's stateful inspection, so the conntrack flush is immediately undone. Add a host-side fallback DROP in such environments.
+
+> Without point 2, the conntrack entries are genuinely deleted (the toast `dropped N existing connections` is honest), but the very next packet to arrive will be re-accepted by the default-permissive `INPUT` chain, and the kernel will rebuild a tracking entry — so the connection appears to "self-heal" instantly. This is intrinsic to Linux conntrack, not a PortPass bug.
+
 ## Security Recommendations
 
 1. Always front the admin UI with HTTPS (Caddy / Nginx)

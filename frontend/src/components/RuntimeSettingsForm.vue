@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BellRing, Bell, RotateCcw, Save, Send, Shield, ShieldCheck, Sliders } from 'lucide-vue-next'
+import {
+  BellRing, Bell, RotateCcw, Save, Send, Shield, ShieldCheck, Sliders,
+  Scissors
+} from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -60,6 +63,7 @@ function emptyForm(): FormState {
     notify_lead_minutes: '',
     notify_channels: '',
     notify_default_enabled: '',
+    cleanup_on_expire_default: '',
   }
 }
 
@@ -197,6 +201,15 @@ const ntfyTokenPlaceholder = computed(() => {
 const notifyDefaultEnabledBool = computed<boolean>({
   get: () => form.notify_default_enabled === 'true',
   set: (v: boolean) => { form.notify_default_enabled = v ? 'true' : 'false' }
+})
+
+// Same string<->bool bridge for cleanup_on_expire_default. Sits in
+// its own dedicated card below ntfy/expiry settings since "drop live
+// connections on rule expiry" is a behaviour switch, not a delivery
+// channel.
+const cleanupOnExpireDefaultBool = computed<boolean>({
+  get: () => form.cleanup_on_expire_default === 'true',
+  set: (v: boolean) => { form.cleanup_on_expire_default = v ? 'true' : 'false' }
 })
 </script>
 
@@ -379,6 +392,30 @@ const notifyDefaultEnabledBool = computed<boolean>({
               {{ t('settings.runtime.notifyDefaultEnabledHelp') }}
             </span>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!--
+      Connection cleanup. Surfaces the runtime default for the
+      per-rule cleanup_on_expire flag. The flag itself is enforced
+      per-rule, so flipping this knob never affects rules already in
+      flight - it only seeds the create form for future rules.
+    -->
+    <section class="rounded-lg border border-border bg-card p-4 flex flex-col gap-3">
+      <header class="flex items-center gap-2">
+        <Scissors class="size-4 text-primary" />
+        <h4 class="text-sm font-semibold">{{ t('settings.runtime.sectionCleanup') }}</h4>
+      </header>
+      <div class="flex flex-col gap-1.5">
+        <Label class="text-xs font-medium">
+          {{ t('settings.runtime.cleanupOnExpireDefault') }}
+        </Label>
+        <div class="flex items-center gap-3">
+          <Switch v-model="cleanupOnExpireDefaultBool" />
+          <span class="text-xs text-muted-foreground">
+            {{ t('settings.runtime.cleanupOnExpireDefaultHelp') }}
+          </span>
         </div>
       </div>
     </section>

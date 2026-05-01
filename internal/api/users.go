@@ -503,7 +503,12 @@ func (s *Server) handleDeleteUser(c *gin.Context) {
 	for i := range rules {
 		r := &rules[i]
 		if r.Status == model.StatusActive || r.Status == model.StatusPending {
-			if err := s.lifecycle.Revoke(r); err != nil {
+			// Cascade-revoke honours the rule's own cleanup_on_expire
+			// flag: if the rule was created with "drop existing flows
+			// on removal" then it stays consistent here too. The
+			// admin who initiated the user-delete inherits whatever
+			// cleanup contract the rule's creator already opted into.
+			if err := s.lifecycle.Revoke(r, r.CleanupOnExpire); err != nil {
 				// Log via audit but don't abort the delete; orphaned
 				// entries will be picked up by reconcile shortly.
 				_ = s.store.WriteAudit(&model.AuditLog{

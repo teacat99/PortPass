@@ -59,10 +59,26 @@ type Rule struct {
 	// pop-up scheduled for the same rule and vice versa. Both are
 	// cleared on Extend so the next imminent expiry triggers another
 	// round of notifications.
-	NotifyEnabled         bool       `gorm:"default:false" json:"notify_enabled"`
-	NotifyLeadSeconds     int        `gorm:"default:0" json:"notify_lead_seconds"`
-	NotifySentBrowserAt   *time.Time `json:"notify_sent_browser_at,omitempty"`
-	NotifySentNtfyAt      *time.Time `json:"notify_sent_ntfy_at,omitempty"`
+	NotifyEnabled       bool       `gorm:"default:false" json:"notify_enabled"`
+	NotifyLeadSeconds   int        `gorm:"default:0" json:"notify_lead_seconds"`
+	NotifySentBrowserAt *time.Time `json:"notify_sent_browser_at,omitempty"`
+	NotifySentNtfyAt    *time.Time `json:"notify_sent_ntfy_at,omitempty"`
+
+	// CleanupOnExpire flips on conntrack flushing for this rule when it
+	// is removed from the firewall (auto expiry, manual revoke, or
+	// reconcile-driven cleanup of an overdue rule). Filtering is by the
+	// exact (source_ip, port, protocol) tuple so other firewall rules
+	// covering different IPs or ports remain untouched. Stored
+	// per-rule rather than as a global flag so different rules can
+	// have different "kick the user out" semantics; the runtime
+	// setting `cleanup_on_expire_default` only seeds the form value
+	// at creation time and never affects rules already in the DB.
+	CleanupOnExpire bool `gorm:"default:false" json:"cleanup_on_expire"`
+	// LastCleanupCount records the number of conntrack entries deleted
+	// the last time cleanup was triggered for this rule, so the UI can
+	// surface "已断开 N 条旧连接" without re-querying the kernel. Zero
+	// means either cleanup was disabled or it ran but found nothing.
+	LastCleanupCount int `gorm:"default:0" json:"last_cleanup_count"`
 }
 
 // PresetPort is a reusable port entry. Beyond being the UI quick-button it

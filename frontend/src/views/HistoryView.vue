@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
-import { RefreshCw, Search as SearchIcon } from 'lucide-vue-next'
+import { RefreshCw, Search as SearchIcon, Scissors } from 'lucide-vue-next'
 import { listHistory } from '@/api/rules'
 import type { Rule } from '@/api/types'
 
@@ -188,7 +188,30 @@ onMounted(reload)
           <TableBody>
             <TableRow v-for="r in paged" :key="r.id">
               <TableCell><CopyableText :value="r.id" mono /></TableCell>
-              <TableCell><StatusTag :status="r.status" /></TableCell>
+              <TableCell>
+                <div class="inline-flex items-center gap-1.5">
+                  <StatusTag :status="r.status" />
+                  <!--
+                    Cleanup badge: only renders when the lifecycle
+                    layer actually flushed at least one conntrack
+                    entry. Tooltip carries the full sentence so the
+                    table stays compact.
+                  -->
+                  <Tooltip v-if="r.last_cleanup_count > 0">
+                    <TooltipTrigger as-child>
+                      <span
+                        class="inline-flex items-center gap-0.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                      >
+                        <Scissors class="size-3" />
+                        {{ r.last_cleanup_count }}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent class="max-w-xs">
+                      {{ t('history.cleanupBadge', { n: r.last_cleanup_count }) }}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </TableCell>
               <TableCell class="max-w-[180px]">
                 <CopyableText :value="r.source_ip" mono truncate />
               </TableCell>
@@ -290,7 +313,17 @@ onMounted(reload)
                 {{ r.protocol.toUpperCase() }}
               </Badge>
             </div>
-            <StatusTag :status="r.status" />
+            <div class="inline-flex items-center gap-1.5 shrink-0">
+              <span
+                v-if="r.last_cleanup_count > 0"
+                class="inline-flex items-center gap-0.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                :title="t('history.cleanupBadge', { n: r.last_cleanup_count })"
+              >
+                <Scissors class="size-3" />
+                {{ r.last_cleanup_count }}
+              </span>
+              <StatusTag :status="r.status" />
+            </div>
           </div>
           <div class="grid grid-cols-2 gap-y-2 gap-x-4 text-sm min-w-0">
             <div class="flex flex-col gap-0.5 min-w-0">

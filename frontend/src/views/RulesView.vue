@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import {
   RefreshCw, Plus, XCircle, Clock, Copy, Search as SearchIcon,
-  Bell, BellOff
+  Bell, BellOff, AlertTriangle, Scissors
 } from 'lucide-vue-next'
 import { duplicateRule, extendRule, setRuleNotify, terminateRule } from '@/api/rules'
 import { useRulesStore } from '@/stores/rules'
@@ -46,6 +46,12 @@ const extendSec = ref<number>(60 * 60)
 
 const search = ref('')
 const confirmTarget = ref<Rule | null>(null)
+// confirmCleanup controls the conntrack flush toggle inside the
+// terminate confirmation dialog. Pre-filled from the rule's own
+// cleanup_on_expire flag so a rule that already opted into cleanup
+// at creation time stays consistent on manual termination - and the
+// operator can still uncheck it for a soft revoke.
+const confirmCleanup = ref(false)
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
@@ -68,16 +74,47 @@ const filtered = computed(() => {
   )
 })
 
-function askTerminate(rule: Rule) { confirmTarget.value = rule }
+function askTerminate(rule: Rule) {
+  confirmTarget.value = rule
+  // Pre-fill the cleanup toggle to mirror the rule's own setting so
+  // the dialog feels like "execute the contract this rule was created
+  // under" rather than a fresh choice every time. Operators can still
+  // tick or untick it before confirming.
+  confirmCleanup.value = rule.cleanup_on_expire
+}
+
+// confirmIsWildcard reports whether the in-flight terminate target
+// uses a wildcard source (0.0.0.0/0 or ::/0). Cleanup on a wildcard
+// rule lacks the per-source filter and would drop every connection
+// to the destination port - we surface a yellow warning banner in
+// that case so the operator opts in deliberately.
+const confirmIsWildcard = computed(() => {
+  const ip = confirmTarget.value?.source_ip ?? ''
+  const trimmed = ip.trim()
+  return trimmed === '' || trimmed === '0.0.0.0/0' || trimmed === '::/0'
+    || trimmed === 'any' || trimmed === 'all'
+})
 
 async function doTerminate() {
   if (!confirmTarget.value) return
   const id = confirmTarget.value.id
+  const cleanup = confirmCleanup.value
   confirmTarget.value = null
-  await terminateRule(id)
-  Message.success(t('msg.ruleTerminated'))
+  const r = await terminateRule(id, cleanup)
+  if (cleanup && r.last_cleanup_count > 0) {
+    Message.success(t('msg.ruleTerminatedCleaned', { n: r.last_cleanup_count }))
+  } else {
+    Message.success(t('msg.ruleTerminated'))
+  }
   await store.reload()
 }
+
+// When the confirm dialog closes via the X / overlay click, reset
+// the cleanup toggle so the next opening starts from the rule's
+// flag rather than carrying state across rules.
+watch(confirmTarget, (t) => {
+  if (!t) confirmCleanup.value = false
+})
 
 function openExtend(rule: Rule) {
   extendTarget.value = rule
@@ -267,6 +304,25 @@ async function toggleNotify(r: Rule) {
                   <Badge :variant="protoVariant(r.protocol)" class="text-[10px] px-1.5 py-0">
                     {{ r.protocol.toUpperCase() }}
                   </Badge>
+                  <!--
+                    Cleanup-armed marker: surfaces only when the rule
+                    will flush conntrack on auto expiry, so the operator
+                    can predict what happens at expiry-time without
+                    drilling into details. Hidden on the soft path.
+                  -->
+                  <Tooltip v-if="r.cleanup_on_expire">
+                    <TooltipTrigger as-child>
+                      <span
+                        class="inline-flex size-4 items-center justify-center rounded-md text-amber-600 dark:text-amber-400"
+                        :aria-label="t('rules.cleanupArmed')"
+                      >
+                        <Scissors class="size-3" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent class="max-w-xs">
+                      {{ t('rules.cleanupArmed') }}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </TableCell>
               <TableCell>
@@ -491,8 +547,51 @@ async function toggleNotify(r: Rule) {
         <DialogHeader>
           <DialogTitle>{{ t('action.terminate') }}</DialogTitle>
         </DialogHeader>
-        <div class="text-sm text-muted-foreground">
-          {{ t('rules.terminateConfirm') }}
+        <div class="flex flex-col gap-3">
+          <div class="text-sm text-muted-foreground">
+            {{ t('rules.terminateConfirm') }}
+          </div>
+          <!--
+            Conntrack flush opt-in. Pre-checked when the rule itself
+            requested cleanup-on-expire so manual termination matches
+            the auto-expire contract; operators can still uncheck for a
+            soft revoke (firewall row gone, existing flows linger).
+          -->
+          <label
+            class="flex items-start gap-2.5 rounded-md border border-border bg-muted/40 p-3 cursor-pointer hover:bg-muted/60 transition-colors"
+            :class="confirmCleanup && 'border-amber-500/40 bg-amber-500/5'"
+          >
+            <input
+              type="checkbox"
+              v-model="confirmCleanup"
+              class="mt-0.5 size-4 shrink-0 rounded border-input text-primary focus:ring-primary"
+            />
+            <div class="flex flex-col gap-0.5 min-w-0 flex-1">
+              <div class="flex items-center gap-1.5">
+                <Scissors class="size-3.5 text-muted-foreground" />
+                <span class="text-sm font-medium text-foreground">
+                  {{ t('rules.terminateCleanup') }}
+                </span>
+              </div>
+              <span class="text-xs text-muted-foreground">
+                {{ t('rules.terminateCleanupHelp') }}
+              </span>
+            </div>
+          </label>
+          <!--
+            Wildcard banner: when the rule's source IP is 0.0.0.0/0
+            cleanup cannot filter by source and will drop every
+            in-flight connection to the destination port. Surfaces only
+            when the operator has actually asked for cleanup so the
+            empty-state stays calm.
+          -->
+          <div
+            v-if="confirmCleanup && confirmIsWildcard"
+            class="flex items-start gap-2 text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+          >
+            <AlertTriangle class="size-3.5 mt-0.5 shrink-0" />
+            <span>{{ t('rules.terminateCleanupWildcardWarn') }}</span>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" @click="confirmTarget = null">{{ t('common.cancel') }}</Button>

@@ -187,6 +187,10 @@ export default {
     notifyContextInsecure: 'Notification API is disabled because this page is not HTTPS / localhost',
     notifyChannelHint: 'Active push channels: {channels}',
 
+    cleanupOnExpire: 'Drop existing connections on expiry',
+    cleanupOnExpireHelp: 'When this rule is removed, also flush conntrack entries that match its source IP, destination port, and protocol — existing SSH/RDP sessions will close. Other firewall rules remain unaffected.',
+    cleanupOnExpireWildcardWarn: 'Source is set to "everyone". Enabling cleanup will tear down EVERY connection on this destination port (including those allowed by other firewall rules). Confirm before continuing.',
+
     submit: 'Open it now',
     submitting: 'Pushing to firewall...',
 
@@ -225,6 +229,10 @@ export default {
     note: 'Note',
     actions: 'Actions',
     terminateConfirm: 'Terminate this rule now?',
+    terminateCleanup: 'Also drop existing connections',
+    terminateCleanupHelp: 'Flush conntrack entries that match this rule (source IP + port + protocol) so currently-connected clients are forced to disconnect.',
+    terminateCleanupWildcardWarn: 'Source is "everyone". Cleanup cannot filter by IP and will drop every connection on this destination port, including ones allowed by other firewall rules. Proceed with caution.',
+    cleanupArmed: 'Drops existing connections on expiry',
     extendDialog: 'Extend expiry',
     extendAmount: 'Extend by',
     notifyOn: 'Will push a reminder {n} min before expiry',
@@ -250,7 +258,8 @@ export default {
     terminatedAt: 'Terminated at',
     duration: 'Duration',
     filterFrom: 'From',
-    filterTo: 'To'
+    filterTo: 'To',
+    cleanupBadge: 'Flushed {n} stale connection(s)'
   },
   settings: {
     title: 'Settings',
@@ -378,7 +387,10 @@ export default {
       notifyChannelBoth: 'Browser + ntfy',
       notifyDefaultEnabled: 'Bell on by default for new rules',
       notifyDefaultEnabledHelp: 'Affects the default state of the bell on the home form; existing rules are not changed',
-      notifyChannelsRequiresNtfy: 'The selected channel includes ntfy but the ntfy URL or topic is empty'
+      notifyChannelsRequiresNtfy: 'The selected channel includes ntfy but the ntfy URL or topic is empty',
+      sectionCleanup: 'Drop existing connections on expiry (conntrack flush when a rule is removed)',
+      cleanupOnExpireDefault: 'Default-enable connection cleanup for new rules',
+      cleanupOnExpireDefaultHelp: 'Only seeds the per-rule checkbox; existing rules are unaffected. Requires the conntrack-tools package on the host — when missing, expiry still works but the cleanup step is skipped with a log entry.'
     },
     notify: {
       test: 'Send test',
@@ -460,6 +472,7 @@ export default {
     rateLimitExceeded: 'Too many requests, please try again later',
     concurrentQuotaExceeded: 'Concurrent rule quota exceeded for this source IP',
     ruleTerminated: 'Rule terminated',
+    ruleTerminatedCleaned: 'Rule terminated; flushed {n} stale connection(s)',
     ruleExtended: 'Rule extended',
     ruleDuplicated: 'Rule duplicated',
     ruleNotifyEnabled: 'Expiry reminder enabled',

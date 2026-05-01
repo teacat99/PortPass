@@ -3,7 +3,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
-import { CheckCircle2, Lock, ArrowRight, RotateCcw, Clock, Bell, BellOff } from 'lucide-vue-next'
+import {
+  CheckCircle2, Lock, ArrowRight, RotateCcw, Clock, Bell, BellOff,
+  Scissors, AlertTriangle
+} from 'lucide-vue-next'
 import { createRule, fetchClientIP, listPresetCategories, listPresets } from '@/api/rules'
 import type { CreateRulePayload, PresetCategory, PresetPort, Rule } from '@/api/types'
 import { useRulesStore } from '@/stores/rules'
@@ -53,7 +56,12 @@ const form = ref({
   durationPreset: 60 * 60 as number | undefined,
   customExpire: undefined as string | undefined,
   note: '',
-  notifyEnabled: false
+  notifyEnabled: false,
+  // cleanupOnExpire toggles per-rule conntrack flushing on auto
+  // expiry. The form seeds it from the runtime default at mount-time;
+  // the user can flip per submission. Kept off by default in the
+  // runtime layer too so upgraders see no behaviour change.
+  cleanupOnExpire: false
 })
 // Initial validity reflects an empty ports string (invalid unless allowEmpty).
 const portsValidation = ref<{ ok: boolean, error: string | null }>({ ok: false, error: null })
@@ -160,12 +168,13 @@ onMounted(async () => {
   } catch { /* ditto */ }
   finally { presetsLoading.value = false }
 
-  // Pull the global default for the bell so HomeView reflects the
-  // operator's preference. Done after presets so the form reactivity
-  // settles in one tick rather than two.
+  // Pull the global defaults for the bell + cleanup toggle so
+  // HomeView reflects the operator's preference. Done after presets
+  // so the form reactivity settles in one tick rather than two.
   if (notifyStore.settings == null) await notifyStore.loadSettings()
   if (notifyStore.settings != null) {
     form.value.notifyEnabled = notifyStore.settings.default_enabled
+    form.value.cleanupOnExpire = !!notifyStore.settings.cleanup_on_expire_default
     if (form.value.notifyEnabled) {
       // Default-on means we should *try* to ensure permission upfront
       // so the user isn't surprised by a denied push on the first
@@ -302,7 +311,8 @@ async function submit() {
         : (form.value.sourceMode === 'manual' ? form.value.manualSource.trim() : undefined),
       duration_sec: form.value.customExpire ? undefined : form.value.durationPreset,
       expire_at: form.value.customExpire ? dayjs(form.value.customExpire).toISOString() : undefined,
-      notify_enabled: form.value.notifyEnabled
+      notify_enabled: form.value.notifyEnabled,
+      cleanup_on_expire: form.value.cleanupOnExpire
     }
     const r = await createRule(payload)
     lastResult.value = r
@@ -593,6 +603,49 @@ const sourceOptions = computed<SourceOpt[]>(() => [
           :placeholder="t('home.notePlaceholder')"
           class="min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
         />
+      </div>
+
+      <!--
+        Advanced options. Keeps the primary 3-step flow (who / what /
+        how long) clean, then surfaces the optional behaviour switches
+        below it. cleanup_on_expire is the only one for now; if more
+        toggles arrive we expand this block into a header.
+      -->
+      <div class="flex flex-col gap-2">
+        <label
+          class="flex items-start gap-2.5 rounded-md border border-border bg-muted/30 p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+          :class="form.cleanupOnExpire && 'border-primary/40 bg-primary/5'"
+        >
+          <input
+            type="checkbox"
+            v-model="form.cleanupOnExpire"
+            class="mt-0.5 size-4 shrink-0 rounded border-input text-primary focus:ring-primary"
+          />
+          <div class="flex flex-col gap-0.5 min-w-0 flex-1">
+            <div class="flex items-center gap-1.5">
+              <Scissors class="size-3.5 text-muted-foreground" />
+              <span class="text-sm font-medium text-foreground">
+                {{ t('home.cleanupOnExpire') }}
+              </span>
+            </div>
+            <span class="text-xs text-muted-foreground">
+              {{ t('home.cleanupOnExpireHelp') }}
+            </span>
+          </div>
+        </label>
+        <!--
+          Wildcard warning: cleanup against a 0.0.0.0/0 rule cannot
+          filter by source IP, so it will drop every flow targeting
+          the destination port. Surface only when the user has both
+          opted into cleanup AND chosen the "any source" mode.
+        -->
+        <div
+          v-if="form.cleanupOnExpire && form.sourceMode === 'any'"
+          class="flex items-start gap-2 text-xs rounded-md px-3 py-2 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        >
+          <AlertTriangle class="size-3.5 mt-0.5 shrink-0" />
+          <span>{{ t('home.cleanupOnExpireWildcardWarn') }}</span>
+        </div>
       </div>
 
       <!-- Submit (desktop inline) -->

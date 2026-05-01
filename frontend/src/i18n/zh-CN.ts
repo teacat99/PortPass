@@ -187,6 +187,10 @@ export default {
     notifyContextInsecure: '该页面非 HTTPS / localhost，浏览器禁用 Notification 接口',
     notifyChannelHint: '当前推送方式：{channels}',
 
+    cleanupOnExpire: '到期断开旧连接',
+    cleanupOnExpireHelp: '规则失效时主动清除来自该来源 IP、目标端口的现有连接（如 SSH、RDP）。仅清理与该规则范围完全匹配的连接，不影响其他规则放行的流量。',
+    cleanupOnExpireWildcardWarn: '该规则源 IP 为「所有人」，开启后将切断目标端口上所有现有连接（含其他防火墙规则放行的）。请确认风险后再使用。',
+
     submit: '立即开放',
     submitting: '正在下发到防火墙...',
 
@@ -225,6 +229,10 @@ export default {
     note: '备注',
     actions: '操作',
     terminateConfirm: '确定要立即终止该规则吗？',
+    terminateCleanup: '同时断开旧连接',
+    terminateCleanupHelp: '清除该规则放行范围内的现有连接（按来源 IP + 端口 + 协议精确匹配），让正在使用的客户端立即断开。',
+    terminateCleanupWildcardWarn: '该规则源 IP 为「所有人」，断开操作会切断目标端口上所有现有连接，包括其他防火墙规则放行的。请确认风险。',
+    cleanupArmed: '到期会自动断开旧连接',
     extendDialog: '延长有效期',
     extendAmount: '延长时长',
     notifyOn: '到期前 {n} 分钟会推送提醒',
@@ -250,7 +258,8 @@ export default {
     terminatedAt: '终止时间',
     duration: '持续时长',
     filterFrom: '起始时间',
-    filterTo: '结束时间'
+    filterTo: '结束时间',
+    cleanupBadge: '已清理 {n} 条旧连接'
   },
   settings: {
     title: '设置',
@@ -378,7 +387,10 @@ export default {
       notifyChannelBoth: '浏览器 + ntfy',
       notifyDefaultEnabled: '新规则默认开启提醒',
       notifyDefaultEnabledHelp: '影响首页表单上的铃铛默认状态；既有规则不受影响',
-      notifyChannelsRequiresNtfy: '所选推送方式包含 ntfy，但 ntfy 服务地址或主题尚未填写'
+      notifyChannelsRequiresNtfy: '所选推送方式包含 ntfy，但 ntfy 服务地址或主题尚未填写',
+      sectionCleanup: '到期断开旧连接（防火墙规则失效时清理 conntrack）',
+      cleanupOnExpireDefault: '新规则默认开启「到期断开旧连接」',
+      cleanupOnExpireDefaultHelp: '只影响新规则的初始勾选状态，不会改变已存在的规则；运行时需要安装 conntrack-tools，缺失时仅会记录日志而不会阻断规则失效流程。'
     },
     notify: {
       test: '发送测试',
@@ -460,6 +472,7 @@ export default {
     rateLimitExceeded: '请求过于频繁，请稍后再试',
     concurrentQuotaExceeded: '同一来源 IP 的并发规则数已达上限',
     ruleTerminated: '规则已终止',
+    ruleTerminatedCleaned: '规则已终止，已断开 {n} 条旧连接',
     ruleExtended: '规则已延长',
     ruleDuplicated: '规则已复制',
     ruleNotifyEnabled: '已开启到期提醒',

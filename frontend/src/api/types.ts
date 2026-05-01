@@ -19,6 +19,15 @@ export interface Rule {
   notify_lead_seconds: number
   notify_sent_browser_at?: string
   notify_sent_ntfy_at?: string
+  // cleanup_on_expire toggles conntrack flushing when the rule is
+  // removed (auto expiry / reconcile-driven cleanup / cascade-revoke
+  // on user delete). Manual termination has its own confirmation
+  // dialog so this flag does not gate that path.
+  cleanup_on_expire: boolean
+  // last_cleanup_count is updated by the backend after each cleanup
+  // run. Zero means cleanup was disabled, conntrack was unavailable,
+  // or it ran but matched no live entries.
+  last_cleanup_count: number
 }
 
 export interface PresetPort {
@@ -113,4 +122,5 @@ export interface CreateRulePayload {
   expire_at?: string
   note?: string
   notify_enabled?: boolean
+  cleanup_on_expire?: boolean
 }

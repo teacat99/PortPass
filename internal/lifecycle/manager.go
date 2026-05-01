@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -15,16 +16,22 @@ import (
 // reconciliation to keep the persisted state and live firewall state in sync.
 //
 // Reliability strategy (see plan.md §"规则生命周期管理"):
-//   1. Primary channel: AfterFunc fires at expire_at and removes the rule.
-//   2. Fallback: every ReconcileInterval the manager scans DB vs. driver and
-//      fixes any drift (expired-but-present rules, clock skew after sleep,
-//      rules manually deleted by an operator, orphaned rules whose DB row
-//      was lost).
-//   3. Boot: Start() reconciles once synchronously so the in-memory state
-//      matches reality before the HTTP server begins accepting requests.
-//   4. Shutdown: Stop() cancels timers but does NOT remove firewall rules,
-//      so a container restart is not perceived as a revocation. The next
-//      boot reconciles and re-schedules.
+//  1. Primary channel: AfterFunc fires at expire_at and removes the rule.
+//  2. Fallback: every ReconcileInterval the manager scans DB vs. driver and
+//     fixes any drift (expired-but-present rules, clock skew after sleep,
+//     rules manually deleted by an operator, orphaned rules whose DB row
+//     was lost).
+//  3. Boot: Start() reconciles once synchronously so the in-memory state
+//     matches reality before the HTTP server begins accepting requests.
+//  4. Shutdown: Stop() cancels timers but does NOT remove firewall rules,
+//     so a container restart is not perceived as a revocation. The next
+//     boot reconciles and re-schedules.
+//
+// Cleanup-on-expire (per-rule opt-in): when a rule carries
+// CleanupOnExpire=true, the manager additionally drops every conntrack
+// entry permitted by that rule after Remove() returns. Failures are
+// logged but never block the rule's status transition - the firewall
+// row going away is the contract; severing live flows is best-effort.
 type Manager struct {
 	store    *store.Store
 	driver   firewall.Driver
@@ -33,7 +40,7 @@ type Manager struct {
 	mu     sync.Mutex
 	timers map[uint]*time.Timer
 
-	stopCh chan struct{}
+	stopCh   chan struct{}
 	stopOnce sync.Once
 }
 
@@ -107,8 +114,14 @@ func (m *Manager) Extend(rule *model.Rule, newExpire time.Time) error {
 	return nil
 }
 
-// Revoke removes the rule immediately (UI "提前终止" button).
-func (m *Manager) Revoke(rule *model.Rule) error {
+// Revoke removes the rule immediately (UI "提前终止" button). The
+// `cleanup` argument controls whether we also drop existing conntrack
+// entries for this rule's (src, port, proto) tuple, regardless of the
+// rule's own CleanupOnExpire flag - the manual Revoke flow exposes
+// the choice in a confirmation dialog so the operator decides every
+// time, while the rule-level flag governs all *automatic* removals
+// (auto expiry / reconcile-driven cleanup).
+func (m *Manager) Revoke(rule *model.Rule, cleanup bool) error {
 	m.cancelTimer(rule.ID)
 	if err := m.driver.Remove(rule); err != nil {
 		return err
@@ -116,6 +129,9 @@ func (m *Manager) Revoke(rule *model.Rule) error {
 	now := time.Now()
 	rule.Status = model.StatusRevoked
 	rule.TerminatedAt = &now
+	if cleanup {
+		rule.LastCleanupCount = m.runCleanup(rule, "revoke")
+	}
 	return m.store.UpdateRule(rule)
 }
 
@@ -152,6 +168,9 @@ func (m *Manager) Reconcile() error {
 			terminated := now
 			r.Status = model.StatusExpired
 			r.TerminatedAt = &terminated
+			if r.CleanupOnExpire {
+				r.LastCleanupCount = m.runCleanup(r, "reconcile")
+			}
 			if err := m.store.UpdateRule(r); err != nil {
 				log.Printf("[reconcile] mark expired rule %d failed: %v", r.ID, err)
 			}
@@ -240,10 +259,35 @@ func (m *Manager) onExpire(ruleID uint) {
 	now := time.Now()
 	r.Status = model.StatusExpired
 	r.TerminatedAt = &now
+	if r.CleanupOnExpire {
+		r.LastCleanupCount = m.runCleanup(r, "expire")
+	}
 	if err := m.store.UpdateRule(r); err != nil {
 		log.Printf("[expire] update rule %d failed: %v", ruleID, err)
 	}
 	m.mu.Lock()
 	delete(m.timers, ruleID)
 	m.mu.Unlock()
+}
+
+// runCleanup invokes firewall.FlushConntrack and returns the number of
+// connection-tracking entries that were dropped. Failures are logged
+// at warn level (so the operator can spot a missing conntrack-tools
+// install) but never bubble up: the firewall ACCEPT row is already
+// gone, so blocking new connections is intact - severing established
+// flows is best-effort. `phase` is a free-form tag so the same helper
+// is reusable for revoke / expire / reconcile log lines.
+func (m *Manager) runCleanup(rule *model.Rule, phase string) int {
+	count, err := firewall.FlushConntrack(rule)
+	switch {
+	case err == nil:
+		if count > 0 {
+			log.Printf("[%s] flushed %d conntrack entries for rule %d", phase, count, rule.ID)
+		}
+	case errors.Is(err, firewall.ErrConntrackUnavailable):
+		log.Printf("[%s] cleanup requested for rule %d but conntrack binary not installed; skipping", phase, rule.ID)
+	default:
+		log.Printf("[%s] cleanup failed for rule %d: %v", phase, rule.ID, err)
+	}
+	return count
 }
