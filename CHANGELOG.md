@@ -4,6 +4,30 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.2.3] - 2026-05-01
+
+### 新增
+
+- **规则到期 / 手动终止时按需断开旧连接**：规则携带 `cleanup_on_expire` 标志（默认关，向后兼容），到期或手动终止时调用宿主机 `conntrack -D` 精确删除 `(源 IP, 目的端口, 协议)` 三元组的连接跟踪条目，让已建立的 TCP/UDP 连接随规则失效真正切断，而不是继续 hold 直到客户端自己关
+  - 后端三条触发路径：自动到期 / 手动终止 / Reconcile 移除过期规则；`POST /api/rules/:id/terminate` 接受 body `{cleanup: bool}`；创建规则接受 `cleanup_on_expire: bool`；响应回写 `last_cleanup_count` 持久化到 DB
+  - 全局默认开关：设置 → 运行时新增 `cleanup_on_expire_default`，通过 `/api/notify/settings` 公开给所有登录用户，用于初始化创建表单的勾选默认值
+  - 终止确认弹窗的勾选项默认跟随规则字段，可临时改写，便于"这次顺手把人踢掉"或"留它一手"的不同选择
+  - 通配符源 IP 警告：当规则源 IP 为 `0.0.0.0/0` 或 `::/0` 时，创建表单与终止弹窗都会显示警告 banner，提示该规则的清理会影响目标端口上的所有连接（因 `conntrack -D` 在通配符源下退化为按 dport+proto 全删）
+  - 列表视觉指示：规则页对开启清理的规则在端口旁显示剪刀图标，hover 给出 tooltip；历史页对成功清理过条目的规则显示琥珀色徽章 + 实际清理条数
+  - 失败降级：宿主机缺 `conntrack-tools` 包时返回 `ErrConntrackUnavailable`，记录 warn 日志但**不阻断**规则状态流转；规则照常进入 `expired` / `revoked`
+- **运行时镜像内置 `conntrack-tools`**：Dockerfile 增加 `apk add conntrack-tools`，新部署开箱可用；自建镜像需同步打入
+
+### 部署
+
+```bash
+docker pull teacat99/portpass:1.2.3
+docker pull ghcr.io/teacat99/portpass:1.2.3
+```
+
+数据库会自动迁移：`rules` 表增加 `cleanup_on_expire` / `last_cleanup_count` 两列；`settings` KV 增加 `cleanup_on_expire_default` 一个键。无需手动干预，已有规则的清理标志默认关闭，行为与升级前保持一致。
+
+> **生产部署提示**：要让"清理"真正切断 TCP 连接，宿主机 `INPUT` 链需具备**默认丢弃** / 末尾兜底 DROP 语义（默认 firewalld、`ufw default deny incoming`、`iptables -P INPUT DROP` 都满足）。否则被删的 conntrack 条目会因 INPUT 默认 ACCEPT 而被新数据包立刻在内核重建——这是 Linux 连接跟踪的固有语义，不是 PortPass 缺陷。详见 README「启用到期断开旧连接的部署前提」。
+
 ## [1.2.2] - 2026-04-30
 
 ### 新增
@@ -192,6 +216,9 @@ docker pull ghcr.io/teacat99/portpass:1.0.0
 
 数据库由 GORM 自动迁移，无需手动操作。
 
+[1.2.3]: https://github.com/teacat99/PortPass/releases/tag/v1.2.3
+[1.2.2]: https://github.com/teacat99/PortPass/releases/tag/v1.2.2
+[1.2.1]: https://github.com/teacat99/PortPass/releases/tag/v1.2.1
 [1.2.0]: https://github.com/teacat99/PortPass/releases/tag/v1.2.0
 [1.1.3]: https://github.com/teacat99/PortPass/releases/tag/v1.1.3
 [1.1.2]: https://github.com/teacat99/PortPass/releases/tag/v1.1.2
